@@ -27,6 +27,155 @@ from .errors import IndiConnectionError, IndiDisconnectedError
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# XML stream splitter
+#
+# The INDI server sends a continuous stream of top-level XML elements with no
+# document wrapper or length framing.  We must detect complete element
+# boundaries ourselves by tracking tag nesting depth and respecting quoted
+# attribute values.
+# ---------------------------------------------------------------------------
+
+def _find_gt(buf: bytes, pos: int) -> int:
+    """Return index of the next '>' that is not inside a quoted string."""
+    n = len(buf)
+    while pos < n:
+        c = buf[pos]
+        if c == ord('"'):
+            pos += 1
+            while pos < n and buf[pos] != ord('"'):
+                pos += 1
+            if pos >= n:
+                return -1
+        elif c == ord("'"):
+            pos += 1
+            while pos < n and buf[pos] != ord("'"):
+                pos += 1
+            if pos >= n:
+                return -1
+        elif c == ord('>'):
+            return pos
+        pos += 1
+    return -1
+
+
+def _find_tag_gt(buf: bytes, pos: int) -> tuple:
+    """Scan from pos (inside an opening tag) to its closing '>'.
+
+    Returns (gt_index, is_self_closing).  gt_index is -1 if not found.
+    """
+    n = len(buf)
+    while pos < n:
+        c = buf[pos]
+        if c == ord('"'):
+            pos += 1
+            while pos < n and buf[pos] != ord('"'):
+                pos += 1
+            if pos >= n:
+                return -1, False
+        elif c == ord("'"):
+            pos += 1
+            while pos < n and buf[pos] != ord("'"):
+                pos += 1
+            if pos >= n:
+                return -1, False
+        elif c == ord('/') and pos + 1 < n and buf[pos + 1] == ord('>'):
+            return pos + 1, True   # self-closing
+        elif c == ord('>'):
+            return pos, False
+        pos += 1
+    return -1, False
+
+
+def _find_element_end(buf: bytes, start: int) -> tuple:
+    """Find the end of the XML element whose '<' is at buf[start].
+
+    Returns (end_pos, is_complete) where end_pos is the index after the
+    final '>' of the element.  is_complete is False when more data is needed.
+    """
+    n = len(buf)
+    depth = 0
+    pos = start
+
+    while pos < n:
+        if buf[pos] != ord('<'):
+            pos += 1
+            continue
+
+        # XML comment
+        if buf[pos:pos + 4] == b'<!--':
+            end = buf.find(b'-->', pos + 4)
+            if end == -1:
+                return start, False
+            pos = end + 3
+            continue
+
+        # Processing instruction
+        if buf[pos:pos + 2] == b'<?':
+            end = buf.find(b'?>', pos + 2)
+            if end == -1:
+                return start, False
+            pos = end + 2
+            continue
+
+        # Closing tag
+        if buf[pos:pos + 2] == b'</':
+            gt = _find_gt(buf, pos + 2)
+            if gt == -1:
+                return start, False
+            depth -= 1
+            pos = gt + 1
+            if depth == 0:
+                return pos, True
+            continue
+
+        # Opening tag (possibly self-closing)
+        gt, self_closing = _find_tag_gt(buf, pos + 1)
+        if gt == -1:
+            return start, False
+        if self_closing:
+            if depth == 0:
+                return gt + 1, True
+            pos = gt + 1
+        else:
+            depth += 1
+            pos = gt + 1
+
+    return start, False
+
+
+def _split_xml_messages(buf: bytes) -> tuple:
+    """Split an INDI XML stream buffer into complete top-level XML elements.
+
+    Returns (messages, remaining_buffer).
+    """
+    messages = []
+    pos = 0
+    n = len(buf)
+
+    while pos < n:
+        # Skip inter-message whitespace
+        while pos < n and buf[pos:pos + 1] in (b' ', b'\t', b'\n', b'\r'):
+            pos += 1
+        if pos >= n:
+            break
+
+        if buf[pos:pos + 1] != b'<':
+            pos += 1   # malformed stream: skip byte
+            continue
+
+        end, complete = _find_element_end(buf, pos)
+        if not complete:
+            break      # wait for more data
+
+        msg = buf[pos:end].strip()
+        if msg:
+            messages.append(msg)
+        pos = end
+
+    return messages, buf[pos:]
+
+
 class IndiTransport:
     """TCP socket transport for INDI protocol.
 
@@ -170,16 +319,10 @@ class IndiTransport:
 
                     buffer += data
 
-                    # Process complete XML messages (delimited by closing tags)
-                    while b">" in buffer:
-                        # Find end of next message
-                        end_idx = buffer.find(b">") + 1
-                        message_bytes = buffer[:end_idx]
-                        buffer = buffer[end_idx:]
-
-                        # Queue complete message
-                        if message_bytes and message_bytes.strip():
-                            self._message_queue.put(message_bytes)
+                    # Extract complete top-level XML elements from the stream
+                    messages, buffer = _split_xml_messages(buffer)
+                    for message_bytes in messages:
+                        self._message_queue.put(message_bytes)
 
                 except socket.timeout:
                     # Timeout is expected, just continue

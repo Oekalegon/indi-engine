@@ -13,7 +13,10 @@
       "Bash(uv run pytest tests/test_parser.py -v -q)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:www.indilib.org)",
-      "Bash(uv run pytest tests/test_nice_to_haves.py -q)"
+      "Bash(uv run pytest tests/test_nice_to_haves.py -q)",
+      "Bash(uv run examples/monitor.py --help)",
+      "Bash(uv run python -c \":*)",
+      "Bash(uv run pytest tests/ -q --ignore=tests/test_transport.py)"
     ],
     "deny": [],
     "ask": []

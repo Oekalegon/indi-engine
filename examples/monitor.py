@@ -60,7 +60,7 @@ def _elements(prop, verbose=False):
                 val = e.getFormat() % float(val)
             except (ValueError, TypeError):
                 pass
-        parts.append(f"{e.getName()}={val}")
+        parts.append(f"{e.getName()}={str(val).strip()}")
     sep = "\n        " if verbose and len(parts) > 3 else "  "
     return sep.join(parts)
 
@@ -137,7 +137,7 @@ class MonitorClient(PurePythonIndiClient):
             f"{_now()}  {BOLD}+ prop{RESET}  "
             f"{prop.getDeviceName()}/{prop.getName()}  "
             f"{_prop_type_tag(prop)}  {_state(prop)}{group}"
-            + (f"\n        {elems}" if elems else "")
+            + (f"  {elems}" if elems else "")
         )
 
     def _on_update_property(self, prop):
@@ -148,7 +148,7 @@ class MonitorClient(PurePythonIndiClient):
             f"{_now()}  {BOLD}~ prop{RESET}  "
             f"{prop.getDeviceName()}/{prop.getName()}  "
             f"{_prop_type_tag(prop)}  {_state(prop)}"
-            + (f"\n        {elems}" if elems else "")
+            + (f"  {elems}" if elems else "")
         )
 
     def _on_remove_property(self, prop):

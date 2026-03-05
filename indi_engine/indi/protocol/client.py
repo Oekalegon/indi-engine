@@ -189,6 +189,13 @@ class PurePythonIndiClient:
         """
         self._require_connected("sendNewNumber")
         if prop_name is not None:
+            device = self._devices.get(prop_or_device)
+            if device:
+                cached_prop = device.properties.get(prop_name)
+                if cached_prop:
+                    cached_elem = cached_prop.elements.get(elem_name)
+                    if cached_elem:
+                        cached_elem.target_value = str(value)
             xml = (
                 f'<newNumberVector device="{prop_or_device}" name="{prop_name}">'
                 f'<oneNumber name="{elem_name}">{value}</oneNumber>'
@@ -197,6 +204,14 @@ class PurePythonIndiClient:
             self._transport.send_message(xml)
         else:
             prop = prop_or_device
+            device = self._devices.get(prop.device_name)
+            for elem in prop.elements.values():
+                if device:
+                    cached_prop = device.properties.get(prop.name)
+                    if cached_prop:
+                        cached_elem = cached_prop.elements.get(elem.name)
+                        if cached_elem:
+                            cached_elem.target_value = str(elem.value)
             parts = [f'<newNumberVector device="{prop.device_name}" name="{prop.name}">']
             for elem in prop.elements.values():
                 parts.append(f'  <oneNumber name="{elem.name}">{elem.value}</oneNumber>')
@@ -215,6 +230,13 @@ class PurePythonIndiClient:
         """
         self._require_connected("sendNewText")
         if prop_name is not None:
+            device = self._devices.get(prop_or_device)
+            if device:
+                cached_prop = device.properties.get(prop_name)
+                if cached_prop:
+                    cached_elem = cached_prop.elements.get(elem_name)
+                    if cached_elem:
+                        cached_elem.target_value = str(text)
             xml = (
                 f'<newTextVector device="{prop_or_device}" name="{prop_name}">'
                 f'<oneText name="{elem_name}">{self._escape_xml(str(text))}</oneText>'
@@ -223,6 +245,14 @@ class PurePythonIndiClient:
             self._transport.send_message(xml)
         else:
             prop = prop_or_device
+            device = self._devices.get(prop.device_name)
+            for elem in prop.elements.values():
+                if device:
+                    cached_prop = device.properties.get(prop.name)
+                    if cached_prop:
+                        cached_elem = cached_prop.elements.get(elem.name)
+                        if cached_elem:
+                            cached_elem.target_value = str(elem.value)
             parts = [f'<newTextVector device="{prop.device_name}" name="{prop.name}">']
             for elem in prop.elements.values():
                 parts.append(f'  <oneText name="{elem.name}">{self._escape_xml(elem.value)}</oneText>')
@@ -241,6 +271,13 @@ class PurePythonIndiClient:
         """
         self._require_connected("sendNewSwitch")
         if prop_name is not None:
+            device = self._devices.get(prop_or_device)
+            if device:
+                cached_prop = device.properties.get(prop_name)
+                if cached_prop:
+                    cached_elem = cached_prop.elements.get(elem_name)
+                    if cached_elem:
+                        cached_elem.target_value = "On"
             xml = (
                 f'<newSwitchVector device="{prop_or_device}" name="{prop_name}">'
                 f'<oneSwitch name="{elem_name}">On</oneSwitch>'
@@ -249,6 +286,14 @@ class PurePythonIndiClient:
             self._transport.send_message(xml)
         else:
             prop = prop_or_device
+            device = self._devices.get(prop.device_name)
+            for elem in prop.elements.values():
+                if device:
+                    cached_prop = device.properties.get(prop.name)
+                    if cached_prop:
+                        cached_elem = cached_prop.elements.get(elem.name)
+                        if cached_elem:
+                            cached_elem.target_value = str(elem.value)
             parts = [f'<newSwitchVector device="{prop.device_name}" name="{prop.name}">']
             for elem in prop.elements.values():
                 parts.append(f'  <oneSwitch name="{elem.name}">{elem.value}</oneSwitch>')
@@ -374,9 +419,11 @@ class PurePythonIndiClient:
         message_text = message.data.get("message", "")
 
         if not device_name:
+            self.logger.info("[INDI message] %s", message_text)
             self.newUniversalMessage(message_text)
             return
 
+        self.logger.info("[INDI message] %s: %s", device_name, message_text)
         device = self._devices.get(device_name)
         if device:
             device.addMessage(message_text)

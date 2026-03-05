@@ -38,6 +38,7 @@ class IPropertyElement:
     step: Optional[float] = None
     blob_format: str = ""  # e.g. ".fits", ".cr2" — only meaningful for blob elements
     blob_size: int = 0     # unencoded byte count — only meaningful for blob elements
+    target_value: Optional[Union[str, bytes]] = None  # last commanded target value, None if never set
 
     def getName(self) -> str:
         """Get element name."""
@@ -74,6 +75,10 @@ class IPropertyElement:
     def getStep(self) -> Optional[float]:
         """Get step size (number elements)."""
         return self.step
+
+    def getTargetValue(self) -> Optional[Union[str, bytes]]:
+        """Get the last commanded target value, or None if never set."""
+        return self.target_value
 
     def setValue(self, value: str) -> None:
         """Set element value."""
