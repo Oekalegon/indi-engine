@@ -1,0 +1,22 @@
+indi:
+  host: localhost
+  port: 7624
+
+server:
+  # Set manage: true to let the engine start/stop indiserver automatically.
+  # Set manage: false if you run indiserver yourself.
+  manage: true
+
+  # mode: process  → engine spawns indiserver directly (default)
+  # mode: systemd  → engine uses systemctl to manage the service
+  # mode: auto     → engine detects at startup which mode to use
+  mode: auto
+
+  # Used when mode is 'process'
+  verbose: false
+  drivers:
+    - indi_simulator_telescope
+    - indi_simulator_ccd
+
+  # Used when mode is 'systemd'
+  service_name: indiserver
