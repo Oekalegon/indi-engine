@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:code.claude.com)",
+      "Read(/Users/donwillems/**)",
+      "Bash(code --list-extensions)",
+      "Bash(uv init --name indi-engine --no-readme)",
+      "Read(//Users/donwillems/.cargo/bin/**)",
+      "Read(//Users/donwillems/.local/bin/**)",
+      "Bash(uv run pytest tests/ -v)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.indilib.org)",
+      "Bash(uv run pytest tests/test_parser.py -v -q)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.indilib.org)",
+      "Bash(uv run pytest tests/test_nice_to_haves.py -q)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

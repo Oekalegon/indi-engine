@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest tests/ -q)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(uv run pytest tests/test_nice_to_haves.py -v)"
+    ]
+  }
+}
