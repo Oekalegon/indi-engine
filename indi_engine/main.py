@@ -12,6 +12,9 @@ from indi_engine.indi.server import (
 from indi_engine.server.socket_server import SocketServer
 from indi_engine.server.serializer import serialize_property, serialize_message
 from indi_engine.state.manager import DeviceStateManager
+from indi_engine.scripting.api import PropertyUpdateBus
+from indi_engine.scripting.registry import ScriptRegistry
+from indi_engine.scripting.runner import ScriptRunner
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -91,6 +94,33 @@ def main():
     client.newMessage          = _on_new_message
     client.newUniversalMessage = _on_universal_message
 
+    # Wire scripting engine
+    scripting_cfg = cfg.get("scripting", {})
+    update_bus = PropertyUpdateBus()
+
+    _orig_update_property = client.updateProperty
+
+    def _on_update_property_with_bus(prop):
+        _orig_update_property(prop)
+        update_bus.notify(prop)
+
+    client.updateProperty = _on_update_property_with_bus
+
+    registry = ScriptRegistry(
+        builtin_dir=scripting_cfg.get("builtin_dir", "scripts/builtin"),
+        user_dir=scripting_cfg.get("user_dir", "scripts/user"),
+    )
+    script_runner = ScriptRunner(
+        registry=registry,
+        indi_client=client,
+        update_bus=update_bus,
+        broadcast_fn=socket_server.broadcast,
+        max_workers=scripting_cfg.get("max_workers", 4),
+        default_timeout=scripting_cfg.get("default_timeout", 3600.0),
+    )
+    socket_server.set_script_runner(script_runner)
+    logger.info("Scripting engine ready (%d workers)", scripting_cfg.get("max_workers", 4))
+
     def _connect_indi(max_attempts: int = 10) -> bool:
         for attempt in range(1, max_attempts + 1):
             try:
@@ -126,6 +156,7 @@ def main():
     while not stop:
         time.sleep(1)
 
+    script_runner.shutdown()
     socket_server.stop()
     client.disconnectServer()
     logger.info("Disconnected.")

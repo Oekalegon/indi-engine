@@ -30,6 +30,7 @@ class SocketServer:
         self._indi_client: Optional[PurePythonIndiClient] = None
         self._server_manager = None
         self._reconnect_callback = None
+        self._script_runner = None
         self._clients: list = []
         self._clients_lock = threading.Lock()
         self._server_socket: Optional[socket.socket] = None
@@ -47,6 +48,10 @@ class SocketServer:
     def set_reconnect_callback(self, callback) -> None:
         """Set a callable() that reconnects the INDI client after a server restart."""
         self._reconnect_callback = callback
+
+    def set_script_runner(self, runner) -> None:
+        """Set the ScriptRunner used to handle script_control commands."""
+        self._script_runner = runner
 
     def start(self) -> None:
         """Bind, listen, and start accepting connections in a background thread."""
@@ -146,6 +151,9 @@ class SocketServer:
         msg_type = msg.get("type")
         if msg_type == "server_control":
             threading.Thread(target=self._handle_server_control, args=(msg, conn), daemon=True).start()
+            return
+        if msg_type == "script_control":
+            threading.Thread(target=self._handle_script_control, args=(msg, conn), daemon=True).start()
             return
         if msg_type != "new":
             logger.debug("Ignoring unknown message type: %s", msg_type)
@@ -265,6 +273,64 @@ class SocketServer:
                 for conn in dead:
                     if conn in self._clients:
                         self._clients.remove(conn)
+
+    def _send_to(self, conn: socket.socket, msg_dict: dict) -> None:
+        """Send a single message directly to one client."""
+        try:
+            data = (json.dumps(msg_dict) + "\n").encode("utf-8")
+            conn.sendall(data)
+        except OSError as e:
+            logger.debug("Could not send message to client: %s", e)
+
+    def _handle_script_control(self, msg: dict, requester: socket.socket) -> None:
+        """Handle a script_control command (runs in its own thread)."""
+        action = msg.get("action")
+
+        if not self._script_runner:
+            self._send_to(requester, {"type": "script_error", "message": "Scripting is not configured"})
+            return
+
+        try:
+            if action == "list":
+                scripts = self._script_runner.registry.list()
+                self._send_to(requester, {"type": "script_list", "scripts": scripts})
+
+            elif action == "run":
+                name = msg["name"]
+                params = msg.get("params", {})
+                self._script_runner.run(name, params)
+                # script_status "running" is broadcast by the runner itself
+
+            elif action == "cancel":
+                run_id = msg["run_id"]
+                ok = self._script_runner.cancel(run_id)
+                self._send_to(requester, {"type": "script_cancel_ack", "run_id": run_id, "ok": ok})
+
+            elif action == "upload":
+                name = msg["name"]
+                content = msg["content"]
+                self._script_runner.registry.save(name, content)
+                self._send_to(requester, {"type": "script_upload_ack", "name": name, "ok": True})
+
+            elif action == "delete":
+                name = msg["name"]
+                self._script_runner.registry.delete(name)
+                self._send_to(requester, {"type": "script_delete_ack", "name": name, "ok": True})
+
+            elif action == "list_runs":
+                runs = self._script_runner.list_runs()
+                self._send_to(requester, {"type": "script_runs", "runs": runs})
+
+            else:
+                self._send_to(requester, {"type": "script_error", "message": f"Unknown action: {action}"})
+
+        except KeyError as e:
+            self._send_to(requester, {"type": "script_error", "message": f"Missing field: {e}"})
+        except (FileNotFoundError, PermissionError, ValueError, SyntaxError) as e:
+            self._send_to(requester, {"type": "script_error", "message": str(e)})
+        except Exception as e:
+            logger.error("script_control %s failed: %s", action, e)
+            self._send_to(requester, {"type": "script_error", "message": str(e)})
 
     def _build_iproperty_from_command(self, msg: dict) -> IProperty:
         """Build an IProperty from a client 'new' command dict."""

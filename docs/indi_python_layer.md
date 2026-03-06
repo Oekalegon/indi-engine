@@ -7,14 +7,14 @@ Pure Python implementation of the INDI client protocol. No native dependencies �
 The layer sits between the INDI server (running on the same machine) and the rest of INDIEngine. It handles the full INDI XML protocol: connecting, receiving property definitions and updates, sending commands, and delivering FITS image data.
 
 ```
-INDI Server (port 7624)
-        │  XML over TCP
-        ▼
+      INDI Server (port 7624)
+                │  XML over TCP
+                ▼
  ┌──────────────────────────────┐
  │  indi_engine.indi.protocol   │
- │  ┌──────────┐  ┌──────────┐ │
- │  │ transport│  │  parser  │ │
- │  └────┬─────┘  └────┬─────┘ │
+ │  ┌──────────┐  ┌──────────┐  │
+ │  │ transport│  │  parser  │  │
+ │  └────┬─────┘  └─────┬────┘  │
  │       └──────┬───────┘       │
  │         ┌────▼────┐          │
  │         │ client  │          │

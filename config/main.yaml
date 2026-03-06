@@ -24,3 +24,13 @@ server:
 engine:
   host: "0.0.0.0"
   port: 8624
+
+scripting:
+  # Directory for built-in scripts shipped with the engine (read-only)
+  builtin_dir: "scripts/builtin"
+  # Directory for user-uploaded scripts (writeable)
+  user_dir: "scripts/user"
+  # Maximum number of concurrently running scripts
+  max_workers: 4
+  # Hard wall-clock time limit per script run (seconds)
+  default_timeout: 3600

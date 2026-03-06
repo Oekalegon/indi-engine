@@ -368,7 +368,7 @@ class PurePythonIndiClient:
 
     def _process_messages(self) -> None:
         """Process incoming messages from INDI server."""
-        while self._reader_running and self._transport.is_connected():
+        while self._reader_running:
             try:
                 message_bytes = self._transport.get_message(timeout=0.1)
                 if not message_bytes:
@@ -384,10 +384,6 @@ class PurePythonIndiClient:
 
             except Exception as e:
                 self.logger.error(f"Error processing message: {e}")
-
-        if self._reader_running:
-            self._reader_running = False
-            self.serverDisconnected(1)
 
     def _handle_message(self, message) -> None:
         """Handle a parsed INDI message."""

@@ -26,7 +26,12 @@
       "Bash(pkill -f \"indi-engine\")",
       "Bash(pkill -f indiserver)",
       "Bash(uv run pytest tests/test_socket_server.py -v)",
-      "Bash(uv run pytest --tb=short -q)"
+      "Bash(uv run pytest --tb=short -q)",
+      "Bash(uv sync)",
+      "Bash(uv run pytest tests/test_scripting.py::TestSandboxBlockedBuiltins::test_blocks_exec tests/test_scripting.py::TestSandboxAllowedBuiltins::test_allows_range tests/test_scripting.py::TestSandboxDunderBlocking::test_blocks_class_subclasses_escape tests/test_scripting.py::TestScriptRunner::test_params_accessible_in_script -v)",
+      "Bash(uv run pytest tests/test_scripting.py -v)",
+      "Bash(uv run pytest tests/ --tb=no -q)",
+      "Bash(uv run pytest tests/test_scripting.py -x)"
     ],
     "deny": [],
     "ask": []

@@ -159,6 +159,14 @@ Server-level messages without a device use `null` for the `device` field:
 | `message` | engine → client | Log message from INDI server or engine component |
 | `server_control` | client → engine | Start, stop, or restart indiserver |
 | `server_status` | engine → client | Current indiserver state broadcast after any `server_control` command |
+| `script_control` | client → engine | List, run, cancel, upload, delete, or list active runs of scripts |
+| `script_status` | engine → client | Script lifecycle and progress updates broadcast to all clients |
+| `script_list` | engine → client | Response to `script_control` `list` action |
+| `script_runs` | engine → client | Response to `script_control` `list_runs` action |
+| `script_cancel_ack` | engine → client | Response to `script_control` `cancel` action |
+| `script_upload_ack` | engine → client | Response to `script_control` `upload` action |
+| `script_delete_ack` | engine → client | Response to `script_control` `delete` action |
+| `script_error` | engine → client | Error response to any failed `script_control` action |
 
 ---
 
@@ -237,4 +245,142 @@ Of course, the INDI engine will also produce log messages, such as imaging seque
         "status": "finished"
     }
 }
+```
+
+---
+
+## Script control
+
+### script_control — client managing scripts
+
+A `script_control` message is sent from an engine client to manage scripts.
+
+| field | type | description |
+|-------|------|-------------|
+| `type` | string | `"script_control"` |
+| `action` | string | One of `"list"`, `"run"`, `"cancel"`, `"upload"`, `"delete"`, `"list_runs"` |
+
+#### list — list available scripts
+
+```json
+{ "type": "script_control", "action": "list" }
+```
+
+Response (`script_list`):
+
+```json
+{
+    "type": "script_list",
+    "scripts": [
+        { "name": "slew_and_track", "description": "Slew the telescope to RA/DEC coordinates and start tracking.", "builtin": true },
+        { "name": "dark_frames",    "description": "Take a series of dark frames.",                                "builtin": true }
+    ]
+}
+```
+
+#### run — run a script
+
+```json
+{
+    "type": "script_control",
+    "action": "run",
+    "name": "slew_and_track",
+    "params": { "ra": 5.0, "dec": 20.0 }
+}
+```
+
+The engine immediately starts broadcasting `script_status` messages to **all** clients (see below). There is no direct response to the requester.
+
+#### cancel — cancel a running script
+
+```json
+{ "type": "script_control", "action": "cancel", "run_id": "<run_id>" }
+```
+
+Response (`script_cancel_ack`) sent to the requester:
+
+```json
+{ "type": "script_cancel_ack", "run_id": "<run_id>", "ok": true }
+```
+
+#### upload — upload a user script
+
+```json
+{
+    "type": "script_control",
+    "action": "upload",
+    "name": "my_script",
+    "content": "log('hello')"
+}
+```
+
+Response (`script_upload_ack`) sent to the requester:
+
+```json
+{ "type": "script_upload_ack", "name": "my_script", "ok": true }
+```
+
+#### delete — delete a user script
+
+```json
+{ "type": "script_control", "action": "delete", "name": "my_script" }
+```
+
+Response (`script_delete_ack`) sent to the requester:
+
+```json
+{ "type": "script_delete_ack", "name": "my_script", "ok": true }
+```
+
+Attempting to delete a built-in script returns a `script_error`.
+
+#### list_runs — list currently running scripts
+
+```json
+{ "type": "script_control", "action": "list_runs" }
+```
+
+Response (`script_runs`) sent to the requester:
+
+```json
+{
+    "type": "script_runs",
+    "runs": [
+        { "run_id": "<run_id>", "name": "slew_and_track", "status": "running" }
+    ]
+}
+```
+
+### script_status — engine broadcasting script progress
+
+Broadcast to **all** connected clients whenever a script starts, logs a message, or finishes.
+
+| field | type | description |
+|-------|------|-------------|
+| `type` | string | `"script_status"` |
+| `run_id` | string | Unique identifier for this script execution (32-character hex) |
+| `name` | string | Script name |
+| `status` | string | `"running"`, `"finished"`, `"error"`, or `"cancelled"` |
+| `message` | string | Human-readable progress or result message |
+| `progress` | number | Completion fraction in `[0.0, 1.0]` |
+
+Lifecycle example for a successful slew:
+
+```json
+{ "type": "script_status", "run_id": "a1b2…", "name": "slew_and_track", "status": "running",  "message": "Script started",                        "progress": 0.0 }
+{ "type": "script_status", "run_id": "a1b2…", "name": "slew_and_track", "status": "running",  "message": "Connecting to telescope…",               "progress": 0.0 }
+{ "type": "script_status", "run_id": "a1b2…", "name": "slew_and_track", "status": "running",  "message": "Slewing to RA=5.0000h  DEC=20.0000°",   "progress": 0.0 }
+{ "type": "script_status", "run_id": "a1b2…", "name": "slew_and_track", "status": "running",  "message": "Slewing…",                               "progress": 0.1 }
+{ "type": "script_status", "run_id": "a1b2…", "name": "slew_and_track", "status": "running",  "message": "Slew complete — tracking at RA=5.0000h  DEC=20.0000°", "progress": 1.0 }
+{ "type": "script_status", "run_id": "a1b2…", "name": "slew_and_track", "status": "finished", "message": "Script completed",                       "progress": 1.0 }
+```
+
+Scripts call `log(message, progress)` to emit intermediate `"running"` status messages. The engine emits `"running"` on start and a final `"finished"`, `"error"`, or `"cancelled"` on completion.
+
+### script_error — error response
+
+Sent to the requester when a `script_control` action fails (e.g. unknown script name, syntax error in uploaded script, missing field):
+
+```json
+{ "type": "script_error", "message": "Script 'unknown_script' not found" }
 ```

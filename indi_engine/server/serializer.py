@@ -126,6 +126,35 @@ def _serialize_element_set(elem, prop_type: IndiPropertyType) -> dict:
     }
 
 
+def serialize_script_status(
+    run_id: str,
+    name: str,
+    status: str,
+    message: str = "",
+    progress: float = 0.0,
+) -> dict:
+    """Convert a script execution status event to a protocol dict.
+
+    Args:
+        run_id: Unique identifier for the script run.
+        name: Script name.
+        status: One of "running", "finished", "error", "cancelled".
+        message: Human-readable progress or result message.
+        progress: Completion fraction in [0.0, 1.0].
+
+    Returns:
+        A dict ready for json.dumps.
+    """
+    return {
+        "type": "script_status",
+        "run_id": run_id,
+        "name": name,
+        "status": status,
+        "message": message,
+        "progress": progress,
+    }
+
+
 def _to_float(value) -> Optional[float]:
     if value is None:
         return None
