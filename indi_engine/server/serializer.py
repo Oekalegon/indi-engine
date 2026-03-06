@@ -9,7 +9,7 @@ the IProperty → dict conversion for the two outbound message types:
 """
 
 from typing import Optional
-from indi_engine.indi.protocol.properties import IProperty
+from indi_engine.indi.protocol.properties import IDevice, IProperty
 from indi_engine.indi.protocol.constants import IndiPropertyType
 
 
@@ -152,6 +152,20 @@ def serialize_script_status(
         "status": status,
         "message": message,
         "progress": progress,
+    }
+
+
+def serialize_device_info(device: IDevice) -> dict:
+    """Convert an IDevice to a device_info protocol dict.
+
+    Returns a dict containing the device name, connected state, and all
+    properties serialized as "def" objects.
+    """
+    return {
+        "type": "device_info",
+        "device": device.name,
+        "connected": device.isConnected(),
+        "properties": [{k: v for k, v in serialize_property(prop, "def").items() if k != "type"} for prop in device.properties.values()],
     }
 
 

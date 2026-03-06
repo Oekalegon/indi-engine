@@ -18,7 +18,7 @@ from indi_engine.indi.protocol.client import PurePythonIndiClient
 from indi_engine.indi.protocol.properties import IProperty, IPropertyElement
 from indi_engine.indi.protocol.constants import IndiPropertyType, IndiPropertyPerm
 from indi_engine.indi.protocol.errors import IndiDisconnectedError
-from indi_engine.server.serializer import serialize_property
+from indi_engine.server.serializer import serialize_property, serialize_device_info
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,9 @@ class SocketServer:
         if msg_type == "script_control":
             threading.Thread(target=self._handle_script_control, args=(msg, conn), daemon=True).start()
             return
+        if msg_type == "device_control":
+            self._handle_device_control(msg, conn)
+            return
         if msg_type != "new":
             logger.debug("Ignoring unknown message type: %s", msg_type)
             return
@@ -232,6 +235,34 @@ class SocketServer:
 
         self._send_server_status(requester)
         self._broadcast_server_status(exclude=requester)
+
+    def _handle_device_control(self, msg: dict, requester: socket.socket) -> None:
+        """Handle a device_control request and reply only to the requesting client."""
+        action = msg.get("action")
+
+        if not self._indi_client:
+            self._send_to(requester, {"type": "device_error", "message": "INDI client not available"})
+            return
+
+        if action == "list":
+            self._send_to(requester, {
+                "type": "device_list",
+                "devices": self._indi_client.getDevices(),
+            })
+
+        elif action == "get":
+            device_name = msg.get("device")
+            if not device_name:
+                self._send_to(requester, {"type": "device_error", "message": "Missing field: device"})
+                return
+            device = self._indi_client.getDevice(device_name)
+            if device is None:
+                self._send_to(requester, {"type": "device_error", "message": f"Unknown device: {device_name}"})
+                return
+            self._send_to(requester, serialize_device_info(device))
+
+        else:
+            self._send_to(requester, {"type": "device_error", "message": f"Unknown action: {action}"})
 
     def _build_server_status(self) -> dict:
         """Return a server_status dict reflecting current state."""
