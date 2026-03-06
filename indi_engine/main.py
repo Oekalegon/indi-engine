@@ -9,6 +9,8 @@ from indi_engine.indi.server import (
     SystemdServerManager,
     detect_mode,
 )
+from indi_engine.server.socket_server import SocketServer
+from indi_engine.server.serializer import serialize_property, serialize_message
 from indi_engine.state.manager import DeviceStateManager
 
 logging.basicConfig(
@@ -53,13 +55,62 @@ def main():
     state_manager = DeviceStateManager()
     client = IndiClient(host=indi_host, port=indi_port, state_manager=state_manager)
 
-    logger.info("Connecting to INDI server at %s:%d …", indi_host, indi_port)
-    if not client.connectServer():
-        logger.error("Could not connect to INDI server. Is indiserver running?")
-        return
+    # Start the engine socket server and wire INDI callbacks to broadcast
+    engine_cfg = cfg.get("engine", {})
+    socket_server = SocketServer(
+        host=engine_cfg.get("host", "0.0.0.0"),
+        port=engine_cfg.get("port", 8624),
+    )
+    socket_server.set_indi_client(client)
+    socket_server.set_server_manager(server_manager)
+    socket_server.start()
 
-    # Watch all devices
-    client.watchDevice("")
+    _orig_newProperty         = client.newProperty
+    _orig_updateProperty      = client.updateProperty
+    _orig_newMessage          = client.newMessage
+    _orig_newUniversalMessage = client.newUniversalMessage
+
+    def _on_new_property(prop):
+        _orig_newProperty(prop)
+        socket_server.broadcast(serialize_property(prop, "def"))
+
+    def _on_update_property(prop):
+        _orig_updateProperty(prop)
+        socket_server.broadcast(serialize_property(prop, "set"))
+
+    def _on_new_message(device, text):
+        _orig_newMessage(device, text)
+        socket_server.broadcast(serialize_message(device.getDeviceName(), text, timestamp=None))
+
+    def _on_universal_message(text):
+        _orig_newUniversalMessage(text)
+        socket_server.broadcast(serialize_message(None, text, timestamp=None))
+
+    client.newProperty         = _on_new_property
+    client.updateProperty      = _on_update_property
+    client.newMessage          = _on_new_message
+    client.newUniversalMessage = _on_universal_message
+
+    def _connect_indi(max_attempts: int = 10) -> bool:
+        for attempt in range(1, max_attempts + 1):
+            try:
+                client.connectServer()
+                client.watchDevice("")
+                return True
+            except Exception as e:
+                if attempt == max_attempts:
+                    logger.error("Could not connect to INDI server after %d attempts: %s", max_attempts, e)
+                    return False
+                logger.info("INDI server not ready yet, retrying in 1 s … (%d/%d)", attempt, max_attempts)
+                time.sleep(1)
+        return False
+
+    socket_server.set_reconnect_callback(_connect_indi)
+
+    logger.info("Connecting to INDI server at %s:%d …", indi_host, indi_port)
+    if not _connect_indi():
+        socket_server.stop()
+        return
 
     stop = False
 
@@ -75,6 +126,7 @@ def main():
     while not stop:
         time.sleep(1)
 
+    socket_server.stop()
     client.disconnectServer()
     logger.info("Disconnected.")
 

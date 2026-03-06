@@ -77,6 +77,7 @@ class PurePythonIndiClient:
 
     def connectServer(self) -> None:
         """Connect to INDI server and start listening for messages."""
+        self._devices.clear()
         try:
             self._transport.connect(self.host, self.port)
             self._reader_running = True

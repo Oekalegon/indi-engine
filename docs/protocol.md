@@ -89,17 +89,18 @@ Example: commanding the mount to slew to RA=10.5, DEC=45.0:
 
 ```json
 {
+    "type": "new",
     "device": "Telescope Simulator",
     "property": "EQUATORIAL_EOD_COORD",
     "data_type": "number",
     "elements": [
         {
             "name": "RA",
-            "target_value": 10.5
+            "value": 10.5
         },
         {
             "name": "DEC",
-            "target_value": 45.0
+            "value": 45.0
         }
     ]
 }
@@ -147,6 +148,79 @@ Server-level messages without a device use `null` for the `device` field:
     "timestamp": "2026-03-05T12:00:00"
 }
 ```
+
+## Message types summary
+
+| type | direction | description |
+|------|-----------|-------------|
+| `def` | engine → client | Property definition with full metadata (sent once per property, and replayed to newly connected clients) |
+| `set` | engine → client | Property value update from the INDI server |
+| `new` | client → engine | Command a new property value; engine forwards to INDI server |
+| `message` | engine → client | Log message from INDI server or engine component |
+| `server_control` | client → engine | Start, stop, or restart indiserver |
+| `server_status` | engine → client | Current indiserver state broadcast after any `server_control` command |
+
+---
+
+## Server control
+
+### server_control — client commanding the server
+
+A `server_control` message is sent from an engine client to start, stop, or restart the INDI server, or to query its current status.
+
+| field | type | description |
+|-------|------|-------------|
+| `type` | string | `"server_control"` |
+| `action` | string | `"status"`, `"start"`, `"stop"`, or `"restart"` |
+| `drivers` | array of strings | (optional) override the driver list for `start` and `restart` |
+
+Examples:
+
+```json
+{ "type": "server_control", "action": "status" }
+```
+
+```json
+{ "type": "server_control", "action": "start" }
+```
+
+```json
+{
+    "type": "server_control",
+    "action": "restart",
+    "drivers": ["indi_simulator_telescope", "indi_simulator_ccd"]
+}
+```
+
+```json
+{ "type": "server_control", "action": "stop" }
+```
+
+### server_status — engine broadcasting server state
+
+After every `server_control` command the engine broadcasts the current server state to **all** connected clients.
+
+| field | type | description |
+|-------|------|-------------|
+| `type` | string | `"server_status"` |
+| `running` | boolean | Whether indiserver is currently running |
+| `indi_connected` | boolean | Whether the engine's INDI client is connected |
+| `drivers` | array of strings | Currently loaded driver names |
+
+Example:
+
+```json
+{
+    "type": "server_status",
+    "running": true,
+    "indi_connected": true,
+    "drivers": ["indi_simulator_telescope", "indi_simulator_ccd"]
+}
+```
+
+---
+
+## Log messages
 
 Of course, the INDI engine will also produce log messages, such as imaging sequence started:
 
