@@ -31,7 +31,8 @@
       "Bash(uv run pytest tests/test_scripting.py::TestSandboxBlockedBuiltins::test_blocks_exec tests/test_scripting.py::TestSandboxAllowedBuiltins::test_allows_range tests/test_scripting.py::TestSandboxDunderBlocking::test_blocks_class_subclasses_escape tests/test_scripting.py::TestScriptRunner::test_params_accessible_in_script -v)",
       "Bash(uv run pytest tests/test_scripting.py -v)",
       "Bash(uv run pytest tests/ --tb=no -q)",
-      "Bash(uv run pytest tests/test_scripting.py -x)"
+      "Bash(uv run pytest tests/test_scripting.py -x)",
+      "Bash(test -f /Users/donwillems/Personal/Development/INDIEngine/config/engine_b.yaml)"
     ],
     "deny": [],
     "ask": []

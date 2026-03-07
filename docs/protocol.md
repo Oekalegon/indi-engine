@@ -153,10 +153,24 @@ Server-level messages without a device use `null` for the `device` field:
 
 | type | direction | description |
 |------|-----------|-------------|
-| `def` | engine → client | Property definition with full metadata (sent once per property, and replayed to newly connected clients) |
+| `def` | engine → client | Property definition with full metadata (sent once per property, and replayed on subscribe) |
 | `set` | engine → client | Property value update from the INDI server |
 | `new` | client → engine | Command a new property value; engine forwards to INDI server |
 | `message` | engine → client | Log message from INDI server or engine component |
+| `subscribe` | client → engine | Subscribe to all messages or a specific device |
+| `subscribe_ack` | engine → client | Subscription confirmed; state snapshot follows |
+| `unsubscribe` | client → engine | Remove a subscription |
+| `unsubscribe_ack` | engine → client | Unsubscription confirmed |
+| `device_control` | client → engine | List known devices or get full property state for one device |
+| `device_list` | engine → client | Response to `device_control` `list` action |
+| `device_info` | engine → client | Response to `device_control` `get` action |
+| `device_error` | engine → client | Error response to a failed `device_control` action |
+| `capability_request` | client → engine | Request engine identity and capabilities |
+| `capability_response` | engine → client | Engine identity, devices, scripts, and capabilities |
+| `engine_list_request` | client → engine | Request list of known peer engines |
+| `engine_list_response` | engine → client | List of known peer engines |
+| `engine_online` | engine → client | Broadcast when a peer engine is discovered via mDNS |
+| `engine_offline` | engine → client | Broadcast when a peer engine disappears from mDNS |
 | `server_control` | client → engine | Start, stop, or restart indiserver |
 | `server_status` | engine → client | Current indiserver state broadcast after any `server_control` command |
 | `script_control` | client → engine | List, run, cancel, upload, delete, or list active runs of scripts |
@@ -167,6 +181,262 @@ Server-level messages without a device use `null` for the `device` field:
 | `script_upload_ack` | engine → client | Response to `script_control` `upload` action |
 | `script_delete_ack` | engine → client | Response to `script_control` `delete` action |
 | `script_error` | engine → client | Error response to any failed `script_control` action |
+
+---
+
+## Provenance
+
+Every message broadcast by an engine carries a `provenance` field — an ordered list of identifiers showing where the message originated and which engines forwarded it. Clients can use this to trace the full path of a message through the network.
+
+The first entry is the INDI server that produced the data (`indi://host:port`). Each engine that forwards the message appends its own UUID.
+
+```json
+{
+    "type": "set",
+    "device": "Telescope Simulator",
+    "property": "EQUATORIAL_EOD_COORD",
+    "provenance": [
+        "indi://localhost:7624",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+    ],
+    "...": "..."
+}
+```
+
+Engines use the provenance list for loop prevention: if an engine's own UUID is already present, the message is dropped instead of forwarded again.
+
+---
+
+## Subscriptions
+
+Clients receive **no messages** until they subscribe. This applies to both regular clients and relay engines connecting to a peer.
+
+### subscribe — client subscribing to messages
+
+| field | type | description |
+|-------|------|-------------|
+| `type` | string | `"subscribe"` |
+| `device` | string | (optional) subscribe to a specific device only; omit to subscribe to all |
+
+```json
+{ "type": "subscribe" }
+```
+
+```json
+{ "type": "subscribe", "device": "Telescope Simulator" }
+```
+
+After a successful subscription the engine immediately sends a state snapshot: all current `def` messages for the subscribed devices. Subsequent updates arrive as `set` messages.
+
+### subscribe_ack — engine confirming subscription
+
+Sent only to the subscribing client.
+
+```json
+{ "type": "subscribe_ack", "device": null, "ok": true }
+```
+
+```json
+{ "type": "subscribe_ack", "device": "Telescope Simulator", "ok": true }
+```
+
+### unsubscribe — client removing a subscription
+
+```json
+{ "type": "unsubscribe" }
+```
+
+```json
+{ "type": "unsubscribe", "device": "Telescope Simulator" }
+```
+
+### unsubscribe_ack — engine confirming removal
+
+```json
+{ "type": "unsubscribe_ack", "device": null, "ok": true }
+```
+
+---
+
+## Device control
+
+### device_control — client querying device state
+
+#### list — list all known devices
+
+```json
+{ "type": "device_control", "action": "list" }
+```
+
+Response (`device_list`) sent to the requester:
+
+```json
+{
+    "type": "device_list",
+    "devices": ["Telescope Simulator", "CCD Simulator"]
+}
+```
+
+#### get — get full property state for a device
+
+```json
+{ "type": "device_control", "action": "get", "device": "Telescope Simulator" }
+```
+
+Response (`device_info`) sent to the requester. Properties are included without a `type` field (the INDI message type is not meaningful here):
+
+```json
+{
+    "type": "device_info",
+    "device": "Telescope Simulator",
+    "connected": true,
+    "properties": [
+        {
+            "property": "EQUATORIAL_EOD_COORD",
+            "data_type": "number",
+            "label": "Eq. Coordinates",
+            "state": "Ok",
+            "elements": [
+                { "name": "RA",  "value": 5.0 },
+                { "name": "DEC", "value": 20.0 }
+            ]
+        }
+    ]
+}
+```
+
+### device_error — error response
+
+Sent to the requester when a `device_control` action fails (e.g. unknown device, missing field):
+
+```json
+{ "type": "device_error", "message": "Unknown device: Foo" }
+```
+
+---
+
+## Capabilities
+
+### capability_request — client requesting engine info
+
+```json
+{ "type": "capability_request" }
+```
+
+### capability_response — engine responding with its identity and capabilities
+
+Sent only to the requesting client.
+
+| field | type | description |
+|-------|------|-------------|
+| `type` | string | `"capability_response"` |
+| `engine_id` | string | Stable UUID of this engine |
+| `name` | string | Human-readable engine name |
+| `devices` | array of strings | Names of currently known INDI devices |
+| `capabilities` | array of objects | Declared capabilities (see below) |
+
+Each capability object has:
+
+| field | type | description |
+|-------|------|-------------|
+| `id` | string | Standardised capability identifier (see capability identifiers below) |
+| `script` | string \| null | Script filename backing this capability, or `null` for non-script capabilities |
+
+```json
+{
+    "type": "capability_response",
+    "engine_id": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "my-engine",
+    "devices": ["Telescope Simulator", "CCD Simulator"],
+    "capabilities": [
+        {"id": "indi_proxy",                    "script": null},
+        {"id": "slew_telescope_and_track",       "script": "slew_and_track.py"},
+        {"id": "capture_dark_frames",            "script": "dark_frames.py"},
+        {"id": "custom_scripts",                 "script": null}
+    ]
+}
+```
+
+### Capability identifiers
+
+Well-known capability IDs:
+
+| id | meaning |
+|----|---------|
+| `indi_proxy` | Engine forwards INDI device data from an indiserver |
+| `slew_telescope_and_track` | Engine can slew a telescope to given coordinates and start tracking |
+| `capture_dark_frames` | Engine can capture a series of dark frames |
+| `custom_scripts` | Engine accepts arbitrary user-uploaded scripts |
+
+Engines may define additional capability IDs for custom workflows. IDs should use `snake_case`.
+
+---
+
+## Engine discovery
+
+Engines advertise themselves via Bonjour/mDNS (`_indiengine._tcp.local.`). Connected clients receive events as peers appear and disappear, and can query the known engine list at any time.
+
+### engine_online — peer engine appeared
+
+Broadcast to all subscribed clients when a peer engine is discovered on the network.
+
+| field | type | description |
+|-------|------|-------------|
+| `type` | string | `"engine_online"` |
+| `engine_id` | string | UUID of the discovered engine |
+| `name` | string | Human-readable name |
+| `host` | string | IP address |
+| `port` | integer | TCP port of the engine's socket server |
+| `capabilities` | array of strings | Capabilities advertised by the peer |
+
+```json
+{
+    "type": "engine_online",
+    "engine_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+    "name": "engine-b",
+    "host": "192.168.1.11",
+    "port": 8625,
+    "capabilities": ["indi_proxy"]
+}
+```
+
+### engine_offline — peer engine disappeared
+
+Broadcast to all subscribed clients when a peer engine stops advertising on mDNS.
+
+```json
+{
+    "type": "engine_offline",
+    "engine_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+    "name": "engine-b"
+}
+```
+
+### engine_list_request — client requesting known peers
+
+```json
+{ "type": "engine_list_request" }
+```
+
+### engine_list_response — engine responding with known peers
+
+Sent only to the requesting client.
+
+```json
+{
+    "type": "engine_list_response",
+    "engines": [
+        {
+            "engine_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "name": "engine-b",
+            "host": "192.168.1.11",
+            "port": 8625,
+            "capabilities": ["indi_proxy"]
+        }
+    ]
+}
+```
 
 ---
 

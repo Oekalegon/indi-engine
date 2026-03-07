@@ -1,0 +1,13 @@
+engine:
+  host: "0.0.0.0"
+  port: 8625
+  id: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+  name: "engine-b"
+  capabilities:
+    - indi_proxy
+  subscriptions:
+    # ID-based: engine-b finds engine-a via mDNS (no host/port needed)
+    - id: "550e8400-e29b-41d4-a716-446655440000"
+    # Direct fallback example (uncomment if mDNS is unavailable):
+    # - host: localhost
+    #   port: 8624

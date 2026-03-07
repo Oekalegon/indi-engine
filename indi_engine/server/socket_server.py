@@ -31,8 +31,14 @@ class SocketServer:
         self._server_manager = None
         self._reconnect_callback = None
         self._script_runner = None
-        self._clients: list = []
-        self._clients_lock = threading.Lock()
+        self._engine_identity = None
+        self._capabilities: list = []
+        self._discovery = None  # set by set_discovery()
+        # Maps each connection socket to its subscription set.
+        # None in the set means "all messages"; a str means that device only.
+        # An empty set means the connection receives nothing.
+        self._connections: dict = {}
+        self._connections_lock = threading.Lock()
         self._server_socket: Optional[socket.socket] = None
         self._running = False
         self._accept_thread: Optional[threading.Thread] = None
@@ -52,6 +58,23 @@ class SocketServer:
     def set_script_runner(self, runner) -> None:
         """Set the ScriptRunner used to handle script_control commands."""
         self._script_runner = runner
+
+    def set_engine_identity(self, identity) -> None:
+        """Set the EngineIdentity used for provenance and capability responses."""
+        self._engine_identity = identity
+
+    def set_capabilities(self, capabilities: list) -> None:
+        """Set the structured capability list advertised in capability responses.
+
+        Each entry is a dict with keys:
+          - "id":     capability identifier string
+          - "script": script filename backing this capability, or None
+        """
+        self._capabilities = list(capabilities)
+
+    def set_discovery(self, discovery) -> None:
+        """Set the EngineDiscovery instance used to answer engine_list_request."""
+        self._discovery = discovery
 
     def start(self) -> None:
         """Bind, listen, and start accepting connections in a background thread."""
@@ -73,22 +96,21 @@ class SocketServer:
                 self._server_socket.close()
             except OSError:
                 pass
-        with self._clients_lock:
-            for conn in self._clients:
+        with self._connections_lock:
+            for conn in list(self._connections):
                 try:
                     conn.close()
                 except OSError:
                     pass
-            self._clients.clear()
+            self._connections.clear()
 
     def _accept_loop(self) -> None:
         while self._running:
             try:
                 conn, addr = self._server_socket.accept()
                 logger.info("Client connected from %s:%d", addr[0], addr[1])
-                with self._clients_lock:
-                    self._clients.append(conn)
-                self._send_current_state(conn)
+                with self._connections_lock:
+                    self._connections[conn] = set()  # no subscriptions yet
                 t = threading.Thread(target=self._handle_client, args=(conn,), daemon=True)
                 t.start()
             except socket.timeout:
@@ -96,12 +118,18 @@ class SocketServer:
             except OSError:
                 break
 
-    def _send_current_state(self, conn: socket.socket) -> None:
-        """Send all currently known properties to a newly connected client."""
+    def _send_current_state(self, conn: socket.socket, device: str = None) -> None:
+        """Send current property snapshot to a client after it subscribes.
+
+        If device is None, sends all known properties. Otherwise only sends
+        properties for the specified device.
+        """
         if not self._indi_client:
             return
-        for device in self._indi_client._devices.values():
-            for prop in device.properties.values():
+        for dev in self._indi_client._devices.values():
+            if device is not None and dev.name != device:
+                continue
+            for prop in dev.properties.values():
                 try:
                     data = (json.dumps(serialize_property(prop, "def")) + "\n").encode("utf-8")
                     conn.sendall(data)
@@ -138,9 +166,8 @@ class SocketServer:
         except OSError:
             pass
         finally:
-            with self._clients_lock:
-                if conn in self._clients:
-                    self._clients.remove(conn)
+            with self._connections_lock:
+                self._connections.pop(conn, None)
             try:
                 conn.close()
             except OSError:
@@ -157,6 +184,15 @@ class SocketServer:
             return
         if msg_type == "device_control":
             self._handle_device_control(msg, conn)
+            return
+        if msg_type in ("subscribe", "unsubscribe"):
+            self._handle_subscription(msg, conn)
+            return
+        if msg_type == "capability_request":
+            self._handle_capability_request(conn)
+            return
+        if msg_type == "engine_list_request":
+            self._handle_engine_list_request(conn)
             return
         if msg_type != "new":
             logger.debug("Ignoring unknown message type: %s", msg_type)
@@ -264,6 +300,48 @@ class SocketServer:
         else:
             self._send_to(requester, {"type": "device_error", "message": f"Unknown action: {action}"})
 
+    def _handle_subscription(self, msg: dict, conn: socket.socket) -> None:
+        """Handle subscribe/unsubscribe messages."""
+        action = msg["type"]  # "subscribe" or "unsubscribe"
+        device = msg.get("device")  # str or None
+
+        with self._connections_lock:
+            subs = self._connections.get(conn)
+            if subs is None:
+                return  # connection already gone
+
+        if action == "subscribe":
+            key = device  # None means "all"
+            with self._connections_lock:
+                self._connections[conn].add(key)
+            self._send_to(conn, {"type": "subscribe_ack", "device": device, "ok": True})
+            self._send_current_state(conn, device=device)
+        else:  # unsubscribe
+            key = device
+            with self._connections_lock:
+                self._connections[conn].discard(key)
+            self._send_to(conn, {"type": "unsubscribe_ack", "device": device, "ok": True})
+
+    def _handle_capability_request(self, conn: socket.socket) -> None:
+        """Respond to a capability_request with engine identity and capabilities."""
+        devices = self._indi_client.getDevices() if self._indi_client else []
+        response = {
+            "type": "capability_response",
+            "engine_id": self._engine_identity.id if self._engine_identity else None,
+            "name": self._engine_identity.name if self._engine_identity else None,
+            "devices": devices,
+            "capabilities": self._capabilities,
+        }
+        self._send_to(conn, response)
+
+    def _handle_engine_list_request(self, conn: socket.socket) -> None:
+        """Respond with the list of known peer engines from the discovery registry."""
+        engines = []
+        if self._discovery:
+            for engine_id, info in self._discovery.known_engines.items():
+                engines.append({"engine_id": engine_id, **info})
+        self._send_to(conn, {"type": "engine_list_response", "engines": engines})
+
     def _build_server_status(self) -> dict:
         """Return a server_status dict reflecting current state."""
         return {
@@ -286,24 +364,60 @@ class SocketServer:
         self.broadcast(self._build_server_status(), exclude=exclude)
 
     def broadcast(self, msg_dict: dict, exclude: socket.socket = None) -> None:
-        """Serialize msg_dict and send it to all connected clients except exclude."""
+        """Serialize msg_dict and send it to all subscribed connections.
+
+        Filtering rules:
+        - System messages (device is None or absent): sent only to connections
+          with None in their subscription set (subscribed to all).
+        - Device messages (device is a str): sent to connections with None in
+          their set (all) or the specific device name in their set.
+
+        Provenance: if an engine identity is configured, own engine ID is
+        appended to the provenance list before sending.
+        """
+        if self._engine_identity:
+            msg_dict = dict(msg_dict)  # shallow copy, don't mutate caller's dict
+            provenance = list(msg_dict.get("provenance") or [])
+            provenance.append(self._engine_identity.id)
+            msg_dict["provenance"] = provenance
+
+        device = msg_dict.get("device")
         data = (json.dumps(msg_dict) + "\n").encode("utf-8")
         dead = []
-        with self._clients_lock:
-            clients_snapshot = list(self._clients)
-        for conn in clients_snapshot:
+        with self._connections_lock:
+            snapshot = dict(self._connections)
+        for conn, subs in snapshot.items():
             if conn is exclude:
                 continue
+            if not subs:
+                continue  # no subscriptions yet
+            if device is None:
+                if None not in subs:
+                    continue  # system message, only for "all" subscribers
+            else:
+                if None not in subs and device not in subs:
+                    continue  # device message, not subscribed to this device
             try:
                 conn.sendall(data)
             except OSError:
                 dead.append(conn)
                 logger.debug("Client disconnected during broadcast, removing")
         if dead:
-            with self._clients_lock:
+            with self._connections_lock:
                 for conn in dead:
-                    if conn in self._clients:
-                        self._clients.remove(conn)
+                    self._connections.pop(conn, None)
+
+    def receive_peer_message(self, msg_dict: dict) -> None:
+        """Accept a message forwarded from a peer engine and re-broadcast it.
+
+        Drops the message if own engine ID is already in the provenance chain
+        (loop prevention). Otherwise appends own ID via the normal broadcast path.
+        """
+        if self._engine_identity:
+            if self._engine_identity.id in (msg_dict.get("provenance") or []):
+                logger.debug("Dropping looped message (own id in provenance)")
+                return
+        self.broadcast(msg_dict)
 
     def _send_to(self, conn: socket.socket, msg_dict: dict) -> None:
         """Send a single message directly to one client."""

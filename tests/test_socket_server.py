@@ -287,12 +287,16 @@ def test_unknown_action_still_returns_server_status(server):
 # ---------------------------------------------------------------------------
 
 def test_server_status_broadcast_to_observer_clients(server):
-    """The server_status also reaches clients that did not send the command."""
+    """server_status broadcast reaches clients that have subscribed."""
     server.set_server_manager(_mock_manager())
     server.set_indi_client(_mock_indi_client())
 
     requester = _connect()
     observer = _connect()
+
+    # Observer must subscribe to receive broadcasts.
+    _send(observer, {"type": "subscribe"})
+    _drain_until(observer, lambda m: m.get("type") == "subscribe_ack")
 
     _send(requester, {"type": "server_control", "action": "status"})
 
@@ -304,6 +308,31 @@ def test_server_status_broadcast_to_observer_clients(server):
 
     assert msg_requester["type"] == "server_status"
     assert msg_observer["type"] == "server_status"
+
+
+def test_unsubscribed_client_receives_nothing_on_broadcast(server):
+    """A client that never subscribes should not receive any broadcasts."""
+    server.set_server_manager(_mock_manager())
+    server.set_indi_client(_mock_indi_client())
+
+    requester = _connect()
+    silent = _connect()
+    silent.settimeout(0.5)
+
+    _send(requester, {"type": "server_control", "action": "status"})
+    _drain_until(requester, _is_server_status)
+
+    # The silent client should receive nothing.
+    try:
+        chunk = silent.recv(4096)
+        got_something = bool(chunk)
+    except socket.timeout:
+        got_something = False
+
+    requester.close()
+    silent.close()
+
+    assert not got_something
 
 
 # ---------------------------------------------------------------------------
