@@ -65,6 +65,10 @@ class ScriptRunner:
         )
         self._runs: dict[str, _RunHandle] = {}
         self._runs_lock = threading.Lock()
+        # Maps CCD device name → run_id for the script that called enable_blobs().
+        # Cleared automatically when the run finishes.
+        self._blob_registry: dict[str, str] = {}
+        self._blob_registry_lock = threading.Lock()
 
     @property
     def registry(self) -> ScriptRegistry:
@@ -118,6 +122,16 @@ class ScriptRunner:
             return True
         return False
 
+    def register_blob_device(self, device: str, run_id: str) -> None:
+        """Called by IndiScriptApi.enable_blobs() to claim a device for a run."""
+        with self._blob_registry_lock:
+            self._blob_registry[device] = run_id
+
+    def get_run_id_for_device(self, device: str) -> str | None:
+        """Return the run_id that last called enable_blobs() for this device, or None."""
+        with self._blob_registry_lock:
+            return self._blob_registry.get(device)
+
     def list_runs(self) -> list:
         """Return a list of currently active runs."""
         with self._runs_lock:
@@ -147,7 +161,13 @@ class ScriptRunner:
         cancel_event: threading.Event,
         log: Callable,
     ) -> None:
-        api = IndiScriptApi(self._client, self._bus, cancel_event)
+        api = IndiScriptApi(
+            self._client,
+            self._bus,
+            cancel_event,
+            run_id=run_id,
+            blob_register=self.register_blob_device,
+        )
         time_api = TimeScriptApi(cancel_event)
         g = make_restricted_globals({
             "indi": api,
@@ -161,6 +181,10 @@ class ScriptRunner:
     def _on_done(self, future, run_id: str, name: str) -> None:
         with self._runs_lock:
             self._runs.pop(run_id, None)
+        with self._blob_registry_lock:
+            stale = [d for d, r in self._blob_registry.items() if r == run_id]
+            for d in stale:
+                del self._blob_registry[d]
         try:
             future.result()
             self._broadcast(

@@ -37,6 +37,7 @@ class SocketServer:
         # Maps each connection socket to its subscription set.
         # None in the set means "all messages"; a str means that device only.
         # An empty set means the connection receives nothing.
+        self._frame_store = None
         self._connections: dict = {}
         self._connections_lock = threading.Lock()
         self._server_socket: Optional[socket.socket] = None
@@ -75,6 +76,10 @@ class SocketServer:
     def set_discovery(self, discovery) -> None:
         """Set the EngineDiscovery instance used to answer engine_list_request."""
         self._discovery = discovery
+
+    def set_frame_store(self, frame_store) -> None:
+        """Set the FrameStore used to handle frame_control commands."""
+        self._frame_store = frame_store
 
     def start(self) -> None:
         """Bind, listen, and start accepting connections in a background thread."""
@@ -193,6 +198,9 @@ class SocketServer:
             return
         if msg_type == "engine_list_request":
             self._handle_engine_list_request(conn)
+            return
+        if msg_type == "frame_control":
+            threading.Thread(target=self._handle_frame_control, args=(msg, conn), daemon=True).start()
             return
         if msg_type != "new":
             logger.debug("Ignoring unknown message type: %s", msg_type)
@@ -427,6 +435,50 @@ class SocketServer:
         except OSError as e:
             logger.debug("Could not send message to client: %s", e)
 
+    def _handle_frame_control(self, msg: dict, requester: socket.socket) -> None:
+        """Handle a frame_control command (runs in its own thread)."""
+        import base64 as _base64
+
+        action = msg.get("action")
+
+        if not self._frame_store:
+            self._send_to(requester, {"type": "frame_error", "message": "Frame store not available"})
+            return
+
+        try:
+            if action == "list":
+                frames = self._frame_store.list()
+                self._send_to(requester, {"type": "frame_list", "frames": frames})
+
+            elif action == "get":
+                frame_id = msg["frame_id"]
+                data, meta = self._frame_store.get(frame_id)
+                self._send_to(requester, {
+                    "type":     "frame_data",
+                    "frame_id": frame_id,
+                    "hash":     meta["hash"],
+                    "format":   meta["format"],
+                    "size":     meta["size"],
+                    "data":     _base64.b64encode(data).decode("ascii"),
+                })
+
+            elif action == "delete":
+                frame_id = msg["frame_id"]
+                hash_    = msg["hash"]
+                self._frame_store.delete(frame_id, hash_)
+                self._send_to(requester, {"type": "frame_delete_ack", "frame_id": frame_id, "ok": True})
+
+            else:
+                self._send_to(requester, {"type": "frame_error", "message": f"Unknown action: {action}"})
+
+        except KeyError as e:
+            self._send_to(requester, {"type": "frame_error", "message": f"Missing field: {e}"})
+        except (FileNotFoundError, ValueError) as e:
+            self._send_to(requester, {"type": "frame_error", "message": str(e)})
+        except Exception as e:
+            logger.error("frame_control %s failed: %s", action, e)
+            self._send_to(requester, {"type": "frame_error", "message": str(e)})
+
     def _handle_script_control(self, msg: dict, requester: socket.socket) -> None:
         """Handle a script_control command (runs in its own thread)."""
         action = msg.get("action")
@@ -461,6 +513,11 @@ class SocketServer:
                 name = msg["name"]
                 self._script_runner.registry.delete(name)
                 self._send_to(requester, {"type": "script_delete_ack", "name": name, "ok": True})
+
+            elif action == "info":
+                name = msg["name"]
+                meta = self._script_runner.registry.describe(name)
+                self._send_to(requester, {"type": "script_info", **meta})
 
             elif action == "list_runs":
                 runs = self._script_runner.list_runs()

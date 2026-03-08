@@ -19,6 +19,7 @@ from indi_engine.state.manager import DeviceStateManager
 from indi_engine.scripting.api import PropertyUpdateBus
 from indi_engine.scripting.registry import ScriptRegistry
 from indi_engine.scripting.runner import ScriptRunner
+from indi_engine.frames.store import FrameStore
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -98,9 +99,13 @@ def main():
     capabilities = _parse_capabilities(engine_cfg.get("capabilities", []))
     cap_ids = [c["id"] for c in capabilities]
 
+    frames_cfg = cfg.get("frames", {})
+    frame_store = FrameStore(data_dir=frames_cfg.get("data_dir", "data/frames"))
+
     socket_server.set_server_manager(server_manager)
     socket_server.set_engine_identity(engine_identity)
     socket_server.set_capabilities(capabilities)
+    socket_server.set_frame_store(frame_store)
     socket_server.start()
 
     # Wire INDI client and scripting only when this engine connects to an INDI server
@@ -142,10 +147,28 @@ def main():
             msg["provenance"] = [_indi_server_id]
             socket_server.broadcast(msg)
 
+        def _on_new_blob(prop):
+            for elem in prop.elements.values():
+                data = elem.value
+                if not isinstance(data, (bytes, bytearray)) or not data:
+                    continue
+                try:
+                    run_id = script_runner.get_run_id_for_device(prop.device_name) if script_runner else None
+                    meta = frame_store.save(
+                        device=prop.device_name,
+                        data=bytes(data),
+                        blob_format=elem.blob_format or ".fits",
+                        run_id=run_id,
+                    )
+                    socket_server.broadcast({"type": "frame_ready", **meta})
+                except Exception:
+                    logger.exception("Failed to save BLOB from %s", prop.device_name)
+
         client.newProperty         = _on_new_property
         client.updateProperty      = _on_update_property
         client.newMessage          = _on_new_message
         client.newUniversalMessage = _on_universal_message
+        client.newBLOB             = _on_new_blob
 
         # Wire scripting engine
         scripting_cfg = cfg.get("scripting", {})

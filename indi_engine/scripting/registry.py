@@ -5,11 +5,16 @@ Maintains two directories:
   user_dir    — writeable scripts uploaded by clients
 
 User scripts take precedence over builtin scripts of the same name on load.
+
+Each .py script may have a companion .yaml file with the same stem that
+provides structured metadata: capability_id, description, and a params list.
 """
 
 import ast
 import re
 from pathlib import Path
+
+import yaml
 
 from indi_engine.scripting.sandbox import check_syntax
 
@@ -41,6 +46,27 @@ def _extract_docstring(source: str) -> str:
     return ""
 
 
+def _load_meta(py_path: Path) -> dict:
+    """Load companion .yaml metadata for a script, return {} if absent."""
+    yaml_path = py_path.with_suffix(".yaml")
+    if yaml_path.exists():
+        return yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    return {}
+
+
+def _script_entry(path: Path, builtin: bool) -> dict:
+    """Build a complete metadata dict for a script file."""
+    source = path.read_text(encoding="utf-8")
+    meta = _load_meta(path)
+    return {
+        "name": path.stem,
+        "builtin": builtin,
+        "capability_id": meta.get("capability_id"),
+        "description": meta.get("description") or _extract_docstring(source),
+        "params": meta.get("params", []),
+    }
+
+
 class ScriptRegistry:
     def __init__(self, builtin_dir: str, user_dir: str) -> None:
         self._builtin = Path(builtin_dir)
@@ -51,25 +77,30 @@ class ScriptRegistry:
         """Return metadata for all known scripts.
 
         Returns:
-            List of dicts with keys: name, builtin (bool), description (str).
+            List of dicts with keys: name, builtin, capability_id,
+            description, params.
         """
         scripts = []
         if self._builtin.exists():
             for path in sorted(self._builtin.glob("*.py")):
-                source = path.read_text(encoding="utf-8")
-                scripts.append({
-                    "name": path.stem,
-                    "builtin": True,
-                    "description": _extract_docstring(source),
-                })
+                scripts.append(_script_entry(path, builtin=True))
         for path in sorted(self._user.glob("*.py")):
-            source = path.read_text(encoding="utf-8")
-            scripts.append({
-                "name": path.stem,
-                "builtin": False,
-                "description": _extract_docstring(source),
-            })
+            scripts.append(_script_entry(path, builtin=False))
         return scripts
+
+    def describe(self, name: str) -> dict:
+        """Return full metadata for a single named script.
+
+        Raises:
+            ValueError: If name contains invalid characters.
+            FileNotFoundError: If no script with that name exists.
+        """
+        _validate_name(name)
+        for builtin, base in ((True, self._builtin), (False, self._user)):
+            p = base / (name + ".py")
+            if p.exists():
+                return _script_entry(p, builtin=builtin)
+        raise FileNotFoundError(f"Script '{name}' not found")
 
     def load(self, name: str) -> str:
         """Return source of a named script.

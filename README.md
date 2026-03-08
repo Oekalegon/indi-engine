@@ -239,6 +239,76 @@ Subscribed clients receive `engine_online` / `engine_offline` events as peers ap
 }
 ```
 
+## Scripts
+
+Scripts are Python files that run inside a RestrictedPython sandbox. Built-in scripts live in `scripts/builtin/`; user-uploaded scripts are stored in `scripts/user/` and take precedence over builtins of the same name.
+
+### Writing a script
+
+Scripts have access to these globals:
+
+| global | description |
+|--------|-------------|
+| `indi` | INDI device API — `connect_device()`, `set_number()`, `set_switch()`, `wait_for_state()`, etc. |
+| `params` | Dict of parameters passed by the caller |
+| `log(msg, progress)` | Emit a progress update to all connected clients (`progress` is `0.0`–`1.0`) |
+| `time_utils` | `sleep(seconds)` and `now()` |
+| `math` | Standard math module |
+
+```python
+"""Capture a single light frame."""
+device = params.get("device", "CCD Simulator")
+exposure = params.get("exposure", 10.0)
+
+indi.connect_device(device)
+indi.set_switch(device, "CCD_FRAME_TYPE", "FRAME_LIGHT")
+indi.set_number(device, "CCD_EXPOSURE", {"CCD_EXPOSURE_VALUE": exposure})
+log("Exposing…", 0.0)
+indi.wait_for_state(device, "CCD_EXPOSURE", "Ok", timeout=exposure + 30)
+log("Done", 1.0)
+```
+
+### Script metadata YAML
+
+Each script can have a companion `.yaml` file with the same stem (e.g. `capture_frame.py` → `capture_frame.yaml`). The metadata is used in `script_list` / `script_info` responses and in capability declarations.
+
+```yaml
+capability_id: capture_frame           # standardised capability identifier
+description: "Capture a single light frame with a CCD camera."
+params:
+  - name: exposure
+    description: "Exposure duration in seconds"
+    type: float          # float | int | string | bool
+    required: false
+    default: 10.0
+    min: 0.001
+    max: 3600.0
+    # step: 1.0          # optional — suggested UI step size
+
+  - name: device
+    description: "CCD device name"
+    type: string
+    required: false
+    default: "CCD Simulator"
+```
+
+If no YAML file is present the engine falls back to the module docstring for the description and treats all parameters as untyped.
+
+### Declaring script-backed capabilities
+
+Reference a script in `config/main.yaml` using `{capability_id: script_filename}` syntax:
+
+```yaml
+engine:
+  capabilities:
+    - indi_proxy
+    - capture_frame: capture_frame.py
+    - slew_telescope_and_track: slew_and_track.py
+    - custom_scripts
+```
+
+---
+
 ## Protocol
 
 The engine exposes a TCP socket on port `8624`. Messages are newline-delimited JSON. See [docs/protocol.md](docs/protocol.md) for the full message format reference including `def`, `set`, `new`, `message`, `server_control`, and `server_status`.
