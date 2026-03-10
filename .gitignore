@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Captured frame data
+data/frames/
