@@ -52,14 +52,14 @@ target_dec   = params.get("target_dec",   None)   # degrees
 target_epoch = params.get("target_epoch", "J2000")
 
 # ── Map frame type to INDI switch element ────────────────────────────────────
-_FRAME_MAP = {
+FRAME_MAP = {
     "light":     "FRAME_LIGHT",
     "dark":      "FRAME_DARK",
     "flat":      "FRAME_FLAT",
     "bias":      "FRAME_BIAS",
     "dark_flat": "FRAME_DARK",   # no universal INDI element for dark-flat
 }
-indi_frame_type = _FRAME_MAP.get(frame_type, "FRAME_LIGHT")
+indi_frame_type = FRAME_MAP.get(frame_type, "FRAME_LIGHT")
 
 # ── Connect camera ───────────────────────────────────────────────────────────
 conn = indi.get_property(device, "CONNECTION")
@@ -69,9 +69,10 @@ if conn is None or indi.get_value(device, "CONNECTION", "CONNECT") != "On":
     indi.wait_for_state(device, "CONNECTION", "Ok", timeout=15.0)
 
 # ── Enable BLOB reception ─────────────────────────────────────────────────────
-# Must be called before triggering the first exposure so the INDI server
-# sends image data back to the engine.
-indi.enable_blobs(device)
+# Called once here to activate BLOB mode on the INDI server and register this
+# run as the owner of incoming BLOBs. capture_params (including frame_index)
+# are updated via update_blob_params() before each exposure inside the loop.
+indi.enable_blobs(device, capture_params={"exposure": exposure, "frame_type": frame_type, "count": count})
 
 # ── Cooler ───────────────────────────────────────────────────────────────────
 if cooler_temp is not None:
@@ -148,6 +149,26 @@ if filter_device and filter_name:
 for i in range(count):
     frame_label = f"frame {i + 1}/{count}" if count > 1 else "frame"
     log(f"Capturing {frame_label} — {exposure}s {frame_type}…", progress=i / count)
+
+    # Update per-frame capture metadata without re-sending setBLOBMode to the
+    # INDI server (re-sending mid-sequence delays BLOB delivery).
+    indi.update_blob_params(device, {
+        "exposure":     exposure,
+        "frame_type":   frame_type,
+        "frame_index":  i + 1,
+        "count":        count,
+        "gain":         gain,
+        "offset":       offset,
+        "bin_x":        bin_x,
+        "bin_y":        bin_y,
+        "frame_x":      frame_x,
+        "frame_y":      frame_y,
+        "frame_w":      frame_w,
+        "frame_h":      frame_h,
+        "filter_name":  filter_name,
+        "cooler_temp":  cooler_temp,
+        "sensor_temp":  indi.get_value(device, "CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"),
+    })
 
     indi.set_number(device, "CCD_EXPOSURE", {"CCD_EXPOSURE_VALUE": exposure})
     indi.wait_for_state(device, "CCD_EXPOSURE", "Busy", timeout=10.0)

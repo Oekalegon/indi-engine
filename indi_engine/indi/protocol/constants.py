@@ -148,6 +148,7 @@ INDI_PORT_DEFAULT = 7624
 
 # Socket timeout and reconnection parameters
 SOCKET_TIMEOUT = 30  # seconds
+RECV_BUFFER_SIZE = 262144  # 256 KB — large chunks reduce O(n²) cost for big BLOBs
 RECONNECT_MIN_DELAY = 2  # seconds (initial backoff)
 RECONNECT_MAX_DELAY = 60  # seconds (maximum backoff)
 RECONNECT_BACKOFF_FACTOR = 2  # exponential backoff multiplier

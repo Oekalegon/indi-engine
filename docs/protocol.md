@@ -468,6 +468,27 @@ Broadcast to all subscribed clients immediately after the engine saves an incomi
 | `hash` | string | SHA-256 hex digest of the stored bytes |
 | `size` | integer | File size in bytes |
 | `format` | string | File extension, e.g. `".fits"` |
+| `capture` | object | Capture settings used for this frame (see below) |
+
+The `capture` object contains the settings that were active when the exposure was taken:
+
+| field | type | description |
+|-------|------|-------------|
+| `exposure` | number | Exposure duration in seconds |
+| `frame_type` | string | `"light"`, `"dark"`, `"flat"`, `"bias"`, or `"dark_flat"` |
+| `frame_index` | integer | 1-based position of this frame within the sequence |
+| `count` | integer | Total number of frames in the sequence |
+| `gain` | number \| null | Sensor gain, or `null` if not set |
+| `offset` | number \| null | Sensor offset (black level), or `null` if not set |
+| `bin_x` | integer | Horizontal binning factor |
+| `bin_y` | integer | Vertical binning factor |
+| `frame_x` | integer \| null | Sub-frame X origin (pixels), or `null` for full sensor |
+| `frame_y` | integer \| null | Sub-frame Y origin (pixels), or `null` for full sensor |
+| `frame_w` | integer \| null | Sub-frame width (pixels), or `null` for full sensor |
+| `frame_h` | integer \| null | Sub-frame height (pixels), or `null` for full sensor |
+| `filter_name` | string \| null | Filter used, or `null` if no filter wheel |
+| `cooler_temp` | number \| null | Target cooler temperature in °C, or `null` if cooler not used |
+| `sensor_temp` | number \| null | Actual sensor temperature in °C at the moment of exposure, or `null` if unavailable |
 
 ```json
 {
@@ -478,7 +499,24 @@ Broadcast to all subscribed clients immediately after the engine saves an incomi
     "timestamp": "2026-03-08T21:00:00+00:00",
     "hash": "e3b0c44298fc1c14…",
     "size": 2880,
-    "format": ".fits"
+    "format": ".fits",
+    "capture": {
+        "exposure": 30.0,
+        "frame_type": "light",
+        "frame_index": 4,
+        "count": 10,
+        "gain": 100,
+        "offset": 10,
+        "bin_x": 1,
+        "bin_y": 1,
+        "frame_x": null,
+        "frame_y": null,
+        "frame_w": null,
+        "frame_h": null,
+        "filter_name": "Ha",
+        "cooler_temp": -10.0,
+        "sensor_temp": -9.8
+    }
 }
 ```
 
@@ -499,11 +537,23 @@ Response (`frame_list`) sent to the requester:
         {
             "frame_id": "3f2504e0-…",
             "device": "CCD Simulator",
-            "run_id": null,
+            "run_id": "a1b2c3d4…",
             "timestamp": "2026-03-08T21:00:00+00:00",
             "hash": "e3b0c442…",
             "size": 2880,
-            "format": ".fits"
+            "format": ".fits",
+            "capture": {
+                "exposure": 30.0,
+                "frame_type": "light",
+                "frame_index": 4,
+                "count": 10,
+                "gain": 100,
+                "bin_x": 1,
+                "bin_y": 1,
+                "filter_name": "Ha",
+                "cooler_temp": -10.0,
+        "sensor_temp": -9.8
+            }
         }
     ]
 }
@@ -521,10 +571,24 @@ Response (`frame_data`) sent to the requester. The `data` field is the raw image
 {
     "type": "frame_data",
     "frame_id": "3f2504e0-…",
+    "device": "CCD Simulator",
+    "run_id": "a1b2c3d4…",
     "hash": "e3b0c442…",
     "format": ".fits",
     "size": 2880,
-    "data": "<base64-encoded bytes>"
+    "data": "<base64-encoded bytes>",
+    "capture": {
+        "exposure": 30.0,
+        "frame_type": "light",
+        "frame_index": 4,
+        "count": 10,
+        "gain": 100,
+        "bin_x": 1,
+        "bin_y": 1,
+        "filter_name": "Ha",
+        "cooler_temp": -10.0,
+        "sensor_temp": -9.8
+    }
 }
 ```
 

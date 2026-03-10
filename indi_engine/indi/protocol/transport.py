@@ -18,6 +18,7 @@ from .constants import (
     INDI_HOST_DEFAULT,
     INDI_PORT_DEFAULT,
     SOCKET_TIMEOUT,
+    RECV_BUFFER_SIZE,
     RECONNECT_MIN_DELAY,
     RECONNECT_MAX_DELAY,
     RECONNECT_BACKOFF_FACTOR,
@@ -87,15 +88,59 @@ def _find_tag_gt(buf: bytes, pos: int) -> tuple:
     return -1, False
 
 
-def _find_element_end(buf: bytes, start: int) -> tuple:
+def _find_element_end(buf: bytes, start: int, scan_from: int = 0) -> tuple:
     """Find the end of the XML element whose '<' is at buf[start].
 
+    scan_from allows resuming a partial scan without re-examining bytes that
+    have already been processed.  It must be >= start + 1.
+
     Returns (end_pos, is_complete) where end_pos is the index after the
-    final '>' of the element.  is_complete is False when more data is needed.
+    final '>' of the element.  is_complete is False when more data is needed;
+    in that case end_pos is the position scanning reached so callers can
+    pass it back as scan_from on the next call.
     """
     n = len(buf)
     depth = 0
     pos = start
+
+    # Fast-path: count tags up to scan_from so we know the depth there.
+    # For the common case (resuming a large BLOB element) depth is always 1
+    # after the outer opening tag, so we can skip straight to scan_from.
+    # We only do this shortcut when scan_from is meaningfully ahead.
+    if scan_from > start + 1:
+        # Re-derive depth up to scan_from by counting unmatched opening tags.
+        p = start
+        while p < scan_from and p < n:
+            if buf[p] != ord('<'):
+                p += 1
+                continue
+            if buf[p:p + 4] == b'<!--':
+                end = buf.find(b'-->', p + 4)
+                p = end + 3 if end != -1 else n
+                continue
+            if buf[p:p + 2] == b'<?':
+                end = buf.find(b'?>', p + 2)
+                p = end + 2 if end != -1 else n
+                continue
+            if buf[p:p + 2] == b'</':
+                gt = _find_gt(buf, p + 2)
+                if gt == -1:
+                    break
+                depth -= 1
+                p = gt + 1
+                if depth == 0:
+                    return p, True
+                continue
+            gt, self_closing = _find_tag_gt(buf, p + 1)
+            if gt == -1:
+                break
+            if self_closing:
+                if depth == 0:
+                    return gt + 1, True
+            else:
+                depth += 1
+            p = gt + 1
+        pos = p
 
     while pos < n:
         if buf[pos] != ord('<'):
@@ -106,7 +151,7 @@ def _find_element_end(buf: bytes, start: int) -> tuple:
         if buf[pos:pos + 4] == b'<!--':
             end = buf.find(b'-->', pos + 4)
             if end == -1:
-                return start, False
+                return pos, False
             pos = end + 3
             continue
 
@@ -114,7 +159,7 @@ def _find_element_end(buf: bytes, start: int) -> tuple:
         if buf[pos:pos + 2] == b'<?':
             end = buf.find(b'?>', pos + 2)
             if end == -1:
-                return start, False
+                return pos, False
             pos = end + 2
             continue
 
@@ -122,7 +167,7 @@ def _find_element_end(buf: bytes, start: int) -> tuple:
         if buf[pos:pos + 2] == b'</':
             gt = _find_gt(buf, pos + 2)
             if gt == -1:
-                return start, False
+                return pos, False
             depth -= 1
             pos = gt + 1
             if depth == 0:
@@ -132,7 +177,7 @@ def _find_element_end(buf: bytes, start: int) -> tuple:
         # Opening tag (possibly self-closing)
         gt, self_closing = _find_tag_gt(buf, pos + 1)
         if gt == -1:
-            return start, False
+            return pos, False
         if self_closing:
             if depth == 0:
                 return gt + 1, True
@@ -141,13 +186,17 @@ def _find_element_end(buf: bytes, start: int) -> tuple:
             depth += 1
             pos = gt + 1
 
-    return start, False
+    return pos, False
 
 
-def _split_xml_messages(buf: bytes) -> tuple:
+def _split_xml_messages(buf: bytes, scan_pos: int = 0) -> tuple:
     """Split an INDI XML stream buffer into complete top-level XML elements.
 
-    Returns (messages, remaining_buffer).
+    scan_pos is the position from which scanning should begin — bytes before
+    it have already been examined and found to be part of an incomplete element.
+    This avoids O(n²) rescanning of large messages (e.g. FITS BLOBs).
+
+    Returns (messages, remaining_buffer, new_scan_pos).
     """
     messages = []
     pos = 0
@@ -164,16 +213,17 @@ def _split_xml_messages(buf: bytes) -> tuple:
             pos += 1   # malformed stream: skip byte
             continue
 
-        end, complete = _find_element_end(buf, pos)
+        end, complete = _find_element_end(buf, pos, scan_from=max(pos + 1, scan_pos))
         if not complete:
-            break      # wait for more data
+            return messages, buf[pos:], end - pos  # end == pos when not complete
+        scan_pos = 0  # reset for next message
 
         msg = buf[pos:end].strip()
         if msg:
             messages.append(msg)
         pos = end
 
-    return messages, buf[pos:]
+    return messages, buf[pos:], 0
 
 
 class IndiTransport:
@@ -300,27 +350,34 @@ class IndiTransport:
         Handles reconnection with exponential backoff.
         """
         buffer = b""
+        scan_pos = 0
 
         while not self._stop_event.is_set():
             try:
                 if not self._connected or not self.socket:
                     self._handle_disconnection()
+                    buffer = b""
+                    scan_pos = 0
                     continue
 
                 # Try to read data from socket
                 try:
-                    data = self.socket.recv(4096)
+                    data = self.socket.recv(RECV_BUFFER_SIZE)
                     if not data:
                         # Connection closed by server
                         self.logger.info("INDI server closed connection")
                         self._connected = False
                         self._handle_disconnection()
+                        buffer = b""
+                        scan_pos = 0
                         continue
 
                     buffer += data
 
-                    # Extract complete top-level XML elements from the stream
-                    messages, buffer = _split_xml_messages(buffer)
+                    # Extract complete top-level XML elements from the stream.
+                    # scan_pos lets the splitter resume where it left off so
+                    # large messages (BLOBs) are not rescanned on every recv.
+                    messages, buffer, scan_pos = _split_xml_messages(buffer, scan_pos)
                     for message_bytes in messages:
                         self._message_queue.put(message_bytes)
 

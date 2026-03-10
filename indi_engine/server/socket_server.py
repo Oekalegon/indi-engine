@@ -456,9 +456,12 @@ class SocketServer:
                 self._send_to(requester, {
                     "type":     "frame_data",
                     "frame_id": frame_id,
+                    "device":   meta.get("device"),
+                    "run_id":   meta.get("run_id"),
                     "hash":     meta["hash"],
                     "format":   meta["format"],
                     "size":     meta["size"],
+                    "capture":  meta.get("capture", {}),
                     "data":     _base64.b64encode(data).decode("ascii"),
                 })
 

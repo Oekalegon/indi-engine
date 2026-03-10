@@ -249,22 +249,45 @@ Scripts have access to these globals:
 
 | global | description |
 |--------|-------------|
-| `indi` | INDI device API — `connect_device()`, `set_number()`, `set_switch()`, `wait_for_state()`, etc. |
+| `indi` | INDI device API (see table below) |
 | `params` | Dict of parameters passed by the caller |
 | `log(msg, progress)` | Emit a progress update to all connected clients (`progress` is `0.0`–`1.0`) |
 | `time_utils` | `sleep(seconds)` and `now()` |
 | `math` | Standard math module |
 
+**`indi` API reference:**
+
+| method | description |
+|--------|-------------|
+| `connect_device(device)` | Connect a device via `CONNECTION/CONNECT` |
+| `disconnect_device(device)` | Disconnect a device |
+| `get_property(device, name)` | Return the `IProperty` object, or `None` |
+| `get_value(device, name, element)` | Return the current element value |
+| `set_number(device, name, values)` | Send a `newNumberVector` command |
+| `set_text(device, name, values)` | Send a `newTextVector` command |
+| `set_switch(device, name, values)` | Send a `newSwitchVector` command |
+| `wait_for_state(device, name, state, timeout)` | Block until the property reaches the given state (`"Idle"`, `"Ok"`, `"Busy"`, `"Alert"`) |
+| `wait_for_value(device, name, element, predicate, timeout)` | Block until `predicate(value)` returns `True` |
+| `enable_blobs(device, mode, capture_params)` | Activate BLOB (image) reception for a device and register this run as the owner of incoming frames. Must be called once before the first exposure. `capture_params` is embedded in every `frame_ready` message. |
+| `update_blob_params(device, capture_params)` | Update the capture metadata for the next incoming BLOB without re-sending the BLOB mode command to the INDI server. Use this inside a capture loop to set per-frame fields like `frame_index`. |
+
 ```python
-"""Capture a single light frame."""
-device = params.get("device", "CCD Simulator")
+"""Capture a short sequence of light frames."""
+device   = params.get("device",   "CCD Simulator")
 exposure = params.get("exposure", 10.0)
+count    = params.get("count",    1)
 
 indi.connect_device(device)
-indi.set_switch(device, "CCD_FRAME_TYPE", "FRAME_LIGHT")
-indi.set_number(device, "CCD_EXPOSURE", {"CCD_EXPOSURE_VALUE": exposure})
-log("Exposing…", 0.0)
-indi.wait_for_state(device, "CCD_EXPOSURE", "Ok", timeout=exposure + 30)
+indi.set_switch(device, "CCD_FRAME_TYPE", {"FRAME_LIGHT": "On"})
+indi.enable_blobs(device, capture_params={"exposure": exposure, "count": count})
+
+for i in range(count):
+    indi.update_blob_params(device, {"exposure": exposure, "frame_index": i + 1, "count": count})
+    indi.set_number(device, "CCD_EXPOSURE", {"CCD_EXPOSURE_VALUE": exposure})
+    indi.wait_for_state(device, "CCD_EXPOSURE", "Busy", timeout=10.0)
+    ok = indi.wait_for_state(device, "CCD_EXPOSURE", "Ok", timeout=exposure + 60)
+    log(f"Frame {i + 1}/{count}", (i + 1) / count)
+
 log("Done", 1.0)
 ```
 

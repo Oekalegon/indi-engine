@@ -105,9 +105,11 @@ def make_restricted_globals(script_context: dict) -> dict:
     builtins["__import__"] = safe_import
 
     g = dict(safe_globals)  # includes _getattr_, _getiter_, _write_ guards
-    # _getitem_ may not be present in all versions; provide a safe default
+    # _getitem_ / _getiter_ may not be present in all versions; provide safe defaults
     if "_getitem_" not in g:
         g["_getitem_"] = _safe_getitem_
+    if "_getiter_" not in g:
+        g["_getiter_"] = iter
     # RestrictedPython transforms print(...) using a PrintCollector pattern.
     # Provide a collector that writes through to stdout.
     g["_print_"] = PrintCollector

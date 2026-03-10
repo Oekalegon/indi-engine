@@ -1,0 +1,10 @@
+{
+  "frame_id": "16150841-8de8-47f6-910d-e38b66c9e7cb",
+  "device": "CCD Simulator",
+  "run_id": null,
+  "timestamp": "2026-03-10T12:37:20.437056+00:00",
+  "hash": "1ca1dc82b3fc78ceb599086d20a2db66d8f3b1fa45f56d042b2ba7e509874d48",
+  "size": 2629440,
+  "format": ".fits",
+  "capture": {}
+}

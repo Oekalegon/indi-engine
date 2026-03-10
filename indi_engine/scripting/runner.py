@@ -122,13 +122,18 @@ class ScriptRunner:
             return True
         return False
 
-    def register_blob_device(self, device: str, run_id: str) -> None:
+    def register_blob_device(
+        self, device: str, run_id: str, capture_params: dict | None = None
+    ) -> None:
         """Called by IndiScriptApi.enable_blobs() to claim a device for a run."""
         with self._blob_registry_lock:
-            self._blob_registry[device] = run_id
+            self._blob_registry[device] = {
+                "run_id": run_id,
+                "capture_params": capture_params or {},
+            }
 
-    def get_run_id_for_device(self, device: str) -> str | None:
-        """Return the run_id that last called enable_blobs() for this device, or None."""
+    def get_blob_context_for_device(self, device: str) -> dict | None:
+        """Return {run_id, capture_params} for the device, or None."""
         with self._blob_registry_lock:
             return self._blob_registry.get(device)
 
@@ -182,7 +187,7 @@ class ScriptRunner:
         with self._runs_lock:
             self._runs.pop(run_id, None)
         with self._blob_registry_lock:
-            stale = [d for d, r in self._blob_registry.items() if r == run_id]
+            stale = [d for d, ctx in self._blob_registry.items() if ctx["run_id"] == run_id]
             for d in stale:
                 del self._blob_registry[d]
         try:

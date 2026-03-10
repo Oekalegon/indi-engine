@@ -1,0 +1,26 @@
+{
+  "frame_id": "0907bd3a-810a-4e6d-885a-7c7edd1501f3",
+  "device": "CCD Simulator",
+  "run_id": "2ac79ad02cf94dc7882ab6b85a2c0cdc",
+  "timestamp": "2026-03-10T10:49:09.887699+00:00",
+  "hash": "724c3324fbcaeb9d71853cb285f9710b5de2efe5177b9e523f2f0baa3825e855",
+  "size": 2626560,
+  "format": ".fits",
+  "capture": {
+    "exposure": 2.0,
+    "frame_type": "light",
+    "frame_index": 1,
+    "count": 3,
+    "gain": null,
+    "offset": null,
+    "bin_x": 1,
+    "bin_y": 1,
+    "frame_x": null,
+    "frame_y": null,
+    "frame_w": null,
+    "frame_h": null,
+    "filter_name": null,
+    "cooler_temp": null,
+    "sensor_temp": 0.0
+  }
+}

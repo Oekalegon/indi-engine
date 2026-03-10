@@ -34,6 +34,7 @@ class FrameStore:
         data: bytes,
         blob_format: str,
         run_id: str | None = None,
+        capture_params: dict | None = None,
     ) -> dict:
         """Save image data and return its metadata dict.
 
@@ -67,13 +68,14 @@ class FrameStore:
         image_path.write_bytes(data)
 
         meta = {
-            "frame_id":  frame_id,
-            "device":    device,
-            "run_id":    run_id,
-            "timestamp": timestamp,
-            "hash":      hash_,
-            "size":      size,
-            "format":    fmt,
+            "frame_id":      frame_id,
+            "device":        device,
+            "run_id":        run_id,
+            "timestamp":     timestamp,
+            "hash":          hash_,
+            "size":          size,
+            "format":        fmt,
+            "capture":       capture_params or {},
         }
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
