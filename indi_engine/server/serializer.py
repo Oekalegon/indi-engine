@@ -171,6 +171,7 @@ def serialize_device_info(device: IDevice) -> dict:
         "type": "device_info",
         "device": device.name,
         "connected": device.isConnected(),
+        "device_types": device.device_types,
         "properties": [{k: v for k, v in serialize_property(prop, "def").items() if k != "type"} for prop in device.properties.values()],
     }
 
