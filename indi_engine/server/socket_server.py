@@ -506,6 +506,12 @@ class SocketServer:
                 ok = self._script_runner.cancel(run_id)
                 self._send_to(requester, {"type": "script_cancel_ack", "run_id": run_id, "ok": ok})
 
+            elif action == "pause":
+                run_id = msg["run_id"]
+                finish_current = msg.get("finish_current", True)
+                ok = self._script_runner.pause(run_id, finish_current=finish_current)
+                self._send_to(requester, {"type": "script_pause_ack", "run_id": run_id, "ok": ok})
+
             elif action == "upload":
                 name = msg["name"]
                 content = msg["content"]

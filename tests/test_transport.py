@@ -13,8 +13,9 @@ import threading
 import time
 from unittest.mock import MagicMock, patch, call
 
-from indi_engine.indi.protocol.transport import IndiTransport
+from indi_engine.indi.protocol.transport import IndiTransport, _split_xml_messages
 from indi_engine.indi.protocol.errors import IndiConnectionError, IndiDisconnectedError
+from indi_engine.indi.protocol.constants import RECV_BUFFER_SIZE
 
 
 class TestIndiTransportInit:
@@ -348,3 +349,94 @@ class TestReconnection:
 
         # _handle_disconnection should have checked stop_event
         # and returned without retrying
+
+
+# ---------------------------------------------------------------------------
+# _split_xml_messages unit tests (incremental scanning)
+# ---------------------------------------------------------------------------
+
+
+class TestSplitXmlMessages:
+    """Unit tests for the _split_xml_messages helper function."""
+
+    def test_single_self_closing_element(self):
+        buf = b"<getProperties/>"
+        msgs, remaining, scan_pos = _split_xml_messages(buf)
+        assert msgs == [b"<getProperties/>"]
+        assert remaining == b""
+        assert scan_pos == 0
+
+    def test_two_elements_in_one_buffer(self):
+        buf = b"<first/><second/>"
+        msgs, remaining, _ = _split_xml_messages(buf)
+        assert msgs == [b"<first/>", b"<second/>"]
+        assert remaining == b""
+
+    def test_incomplete_element_returns_remainder(self):
+        buf = b"<first/><incomplete"
+        msgs, remaining, scan_pos = _split_xml_messages(buf)
+        assert msgs == [b"<first/>"]
+        assert b"<incomplete" in remaining
+        # scan_pos > 0 means scanning can resume from there
+        assert scan_pos >= 0
+
+    def test_element_split_across_calls(self):
+        """Simulate an element arriving in two chunks (incremental scan)."""
+        chunk1 = b'<test attr="val'
+        msgs1, buf1, sp1 = _split_xml_messages(chunk1)
+        assert msgs1 == []
+        assert b"<test" in buf1
+
+        # Second chunk completes the element
+        chunk2 = buf1 + b'ue"/>'
+        msgs2, buf2, sp2 = _split_xml_messages(chunk2, scan_pos=sp1)
+        assert msgs2 == [b'<test attr="value"/>']
+        assert buf2 == b""
+
+    def test_nested_element(self):
+        buf = b"<outer><inner>text</inner></outer>"
+        msgs, remaining, _ = _split_xml_messages(buf)
+        assert msgs == [b"<outer><inner>text</inner></outer>"]
+        assert remaining == b""
+
+    def test_whitespace_between_elements_is_skipped(self):
+        buf = b"<first/>  \n  <second/>"
+        msgs, remaining, _ = _split_xml_messages(buf)
+        assert msgs == [b"<first/>", b"<second/>"]
+
+    def test_scan_pos_resumes_without_re_scanning(self):
+        """scan_pos hint avoids O(n²) rescanning on large incomplete elements."""
+        # Build a large element that arrives in multiple chunks
+        big_content = b"x" * 10000
+        full_element = b"<big>" + big_content + b"</big>"
+
+        # First call: only part of the element has arrived
+        partial = full_element[:5000]
+        msgs1, buf1, sp1 = _split_xml_messages(partial)
+        assert msgs1 == []
+
+        # Second call: rest arrives; scan_pos avoids re-scanning first 5000 bytes
+        full = buf1 + full_element[5000:]
+        msgs2, buf2, sp2 = _split_xml_messages(full, scan_pos=sp1)
+        assert msgs2 == [full_element]
+        assert buf2 == b""
+
+    def test_quoted_gt_in_attribute_does_not_split(self):
+        buf = b'<prop attr=">still inside"/>rest'
+        msgs, remaining, _ = _split_xml_messages(buf)
+        assert len(msgs) == 1
+        assert b"still inside" in msgs[0]
+
+    def test_returns_three_tuple(self):
+        result = _split_xml_messages(b"<x/>")
+        assert len(result) == 3
+
+
+class TestRecvBufferSize:
+    def test_recv_buffer_size_is_large_enough(self):
+        """RECV_BUFFER_SIZE should be at least 64KB for efficient BLOB reception."""
+        assert RECV_BUFFER_SIZE >= 65536
+
+    def test_recv_buffer_size_is_power_of_two_multiple(self):
+        """RECV_BUFFER_SIZE should be a multiple of 4096 (page size)."""
+        assert RECV_BUFFER_SIZE % 4096 == 0

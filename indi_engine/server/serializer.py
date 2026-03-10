@@ -132,20 +132,23 @@ def serialize_script_status(
     status: str,
     message: str = "",
     progress: float = 0.0,
+    resume_command: Optional[dict] = None,
 ) -> dict:
     """Convert a script execution status event to a protocol dict.
 
     Args:
         run_id: Unique identifier for the script run.
         name: Script name.
-        status: One of "running", "finished", "error", "cancelled".
+        status: One of "running", "finished", "error", "cancelled", "paused".
         message: Human-readable progress or result message.
         progress: Completion fraction in [0.0, 1.0].
+        resume_command: For status "paused" only — a ready-to-send
+            script_control/run command the client can replay to resume.
 
     Returns:
         A dict ready for json.dumps.
     """
-    return {
+    msg = {
         "type": "script_status",
         "run_id": run_id,
         "name": name,
@@ -153,6 +156,9 @@ def serialize_script_status(
         "message": message,
         "progress": progress,
     }
+    if resume_command is not None:
+        msg["resume_command"] = resume_command
+    return msg
 
 
 def serialize_device_info(device: IDevice) -> dict:

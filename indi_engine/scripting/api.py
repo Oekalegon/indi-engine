@@ -5,7 +5,7 @@ Provides the objects injected into every script execution context:
   - TimeScriptApi   (name: 'time_utils') — time utilities (astropy Time + sleep)
   - PropertyUpdateBus                    — fan-out hub used by wait_for_state/value
 
-Also defines ScriptCancelledError, raised inside scripts when cancellation is requested.
+Also defines ScriptCancelledError and ScriptPausedError.
 """
 
 import time as _time
@@ -23,6 +23,17 @@ from indi_engine.indi.protocol.constants import (
 
 class ScriptCancelledError(Exception):
     """Raised inside a script when cancellation is requested."""
+
+
+class ScriptPausedError(Exception):
+    """Raised inside a script when a pause request is received.
+
+    resume_params is the dict passed to checkpoint() — it becomes the params
+    of the resume_command broadcast to clients.
+    """
+    def __init__(self, resume_params: dict | None = None) -> None:
+        super().__init__("Script paused")
+        self.resume_params = resume_params
 
 
 class PropertyUpdateBus:
@@ -77,12 +88,17 @@ class IndiScriptApi:
         cancel_event: threading.Event,
         run_id: str = None,
         blob_register: Callable[[str, str], None] = None,
+        pause_immediate: threading.Event = None,
+        pause_deferred: threading.Event = None,
     ) -> None:
         self._client = indi_client
         self._bus = update_bus
         self._cancel = cancel_event
         self._run_id = run_id
         self._blob_register = blob_register
+        self._pause_immediate = pause_immediate or threading.Event()
+        self._pause_deferred = pause_deferred or threading.Event()
+        self._last_checkpoint: dict | None = None
 
     # ------------------------------------------------------------------
     # Read operations
@@ -208,6 +224,27 @@ class IndiScriptApi:
         if self._blob_register and self._run_id:
             self._blob_register(device, self._run_id, capture_params)
 
+    def checkpoint(self, resume_params: dict) -> None:
+        """Store resumable state and raise ScriptPausedError if paused.
+
+        Scripts call this at natural pause points (e.g. between frames in a
+        sequence). The resume_params dict becomes the params of the
+        resume_command broadcast to clients, allowing them to replay the
+        script from this point.
+
+        Raises ScriptPausedError if either a deferred or immediate pause has
+        been requested. Also raises ScriptCancelledError if cancelled.
+
+        Args:
+            resume_params: Dict of parameters that would resume the script from
+                this point (typically the original params with count adjusted
+                to reflect remaining work).
+        """
+        self._require_not_cancelled()
+        self._last_checkpoint = resume_params
+        if self._pause_immediate.is_set() or self._pause_deferred.is_set():
+            raise ScriptPausedError(resume_params)
+
     # ------------------------------------------------------------------
     # Blocking wait operations
     # ------------------------------------------------------------------
@@ -262,6 +299,8 @@ class IndiScriptApi:
                     raise ScriptCancelledError(
                         "Script cancelled during wait_for_state"
                     )
+                if self._pause_immediate.is_set():
+                    raise ScriptPausedError(self._last_checkpoint)
         finally:
             unsub()
 
@@ -329,6 +368,8 @@ class IndiScriptApi:
                     raise ScriptCancelledError(
                         "Script cancelled during wait_for_value"
                     )
+                if self._pause_immediate.is_set():
+                    raise ScriptPausedError(self._last_checkpoint)
         finally:
             unsub()
 
@@ -364,8 +405,15 @@ class IndiScriptApi:
 class TimeScriptApi:
     """Script-facing time utilities. Injected as 'time_utils' into scripts."""
 
-    def __init__(self, cancel_event: threading.Event) -> None:
+    def __init__(
+        self,
+        cancel_event: threading.Event,
+        pause_immediate: threading.Event = None,
+        get_checkpoint: Callable[[], dict | None] = None,
+    ) -> None:
         self._cancel = cancel_event
+        self._pause_immediate = pause_immediate or threading.Event()
+        self._get_checkpoint = get_checkpoint
 
     def now(self):
         """Return current time as astropy.time.Time."""
@@ -373,13 +421,17 @@ class TimeScriptApi:
         return Time.now()
 
     def sleep(self, seconds: float) -> None:
-        """Sleep for the given duration. Interruptible by script cancellation.
+        """Sleep for the given duration. Interruptible by script cancellation or pause.
 
         Raises:
             ScriptCancelledError: If the script is cancelled during sleep.
+            ScriptPausedError: If an immediate pause is requested during sleep.
         """
         deadline = _time.monotonic() + seconds
         while _time.monotonic() < deadline:
             remaining = deadline - _time.monotonic()
             if self._cancel.wait(timeout=min(0.1, remaining)):
                 raise ScriptCancelledError("Script cancelled during sleep")
+            if self._pause_immediate.is_set():
+                checkpoint = self._get_checkpoint() if self._get_checkpoint else None
+                raise ScriptPausedError(checkpoint)
