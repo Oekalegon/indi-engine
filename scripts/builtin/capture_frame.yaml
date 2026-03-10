@@ -1,0 +1,196 @@
+capability_id: capture_frame
+description: "Capture one or more frames with a CCD camera."
+params:
+
+  # ── Core ────────────────────────────────────────────────────────────────
+  - name: device
+    description: "CCD device name"
+    type: string
+    required: false
+    default: "CCD Simulator"
+
+  - name: count
+    description: "Number of frames to capture"
+    type: int
+    required: false
+    default: 1
+    min: 1
+
+  - name: exposure
+    description: "Exposure duration in seconds"
+    type: float
+    required: false
+    default: 10.0
+    min: 0.0001
+    max: 3600.0
+
+  - name: delay
+    description: "Delay between frames in seconds"
+    type: float
+    required: false
+    default: 0.0
+    min: 0.0
+
+  # ── Frame ───────────────────────────────────────────────────────────────
+  - name: frame_type
+    description: "Frame type: light, dark, flat, bias, or dark_flat"
+    type: string
+    required: false
+    default: "light"
+
+  - name: gain
+    description: "Camera gain (driver-dependent units)"
+    type: float
+    required: false
+
+  - name: offset
+    description: "Camera offset / black level (driver-dependent units)"
+    type: float
+    required: false
+
+  - name: bin_x
+    description: "Horizontal binning factor"
+    type: int
+    required: false
+    default: 1
+    min: 1
+
+  - name: bin_y
+    description: "Vertical binning factor"
+    type: int
+    required: false
+    default: 1
+    min: 1
+
+  - name: frame_x
+    description: "Sub-frame origin X in pixels (full frame if omitted)"
+    type: int
+    required: false
+
+  - name: frame_y
+    description: "Sub-frame origin Y in pixels (full frame if omitted)"
+    type: int
+    required: false
+
+  - name: frame_w
+    description: "Sub-frame width in pixels"
+    type: int
+    required: false
+
+  - name: frame_h
+    description: "Sub-frame height in pixels"
+    type: int
+    required: false
+
+  # ── Format ──────────────────────────────────────────────────────────────
+  - name: format
+    description: "Transfer format switch element name (e.g. FITS, NATIVE — driver-dependent)"
+    type: string
+    required: false
+
+  # ── Filter wheel ────────────────────────────────────────────────────────
+  - name: filter_device
+    description: "Filter wheel device name"
+    type: string
+    required: false
+
+  - name: filter_name
+    description: "Filter switch element name to select"
+    type: string
+    required: false
+
+  # ── Cooler ──────────────────────────────────────────────────────────────
+  - name: cooler_temp
+    description: "Target cooler temperature in °C (omit to leave cooler unchanged)"
+    type: float
+    required: false
+    min: -60.0
+    max: 30.0
+
+  - name: cooler_tolerance
+    description: "How close the sensor must be to the target temperature before imaging starts (°C)"
+    type: float
+    required: false
+    default: 0.5
+    min: 0.1
+    max: 5.0
+
+  - name: cooler_timeout
+    description: "Maximum time to wait for the cooler to reach target temperature in seconds; imaging proceeds with a warning if exceeded"
+    type: float
+    required: false
+    default: 300.0
+    min: 10.0
+
+  # ── Image-train metadata ─────────────────────────────────────────────────
+  - name: telescope_name
+    description: "Telescope / optic name (stored in FITS header)"
+    type: string
+    required: false
+
+  - name: focal_length
+    description: "Focal length in mm (used for plate-solving and FITS header)"
+    type: float
+    required: false
+    min: 1.0
+
+  - name: aperture
+    description: "Aperture / clear diameter in mm (stored in FITS header)"
+    type: float
+    required: false
+    min: 1.0
+
+  - name: pixel_size_x
+    description: "Pixel width in micrometres (used for plate-solving and FITS header)"
+    type: float
+    required: false
+    min: 0.1
+
+  - name: pixel_size_y
+    description: "Pixel height in micrometres (used for plate-solving and FITS header)"
+    type: float
+    required: false
+    min: 0.1
+
+  - name: sensor_width_px
+    description: "Sensor width in pixels"
+    type: int
+    required: false
+    min: 1
+
+  - name: sensor_height_px
+    description: "Sensor height in pixels"
+    type: int
+    required: false
+    min: 1
+
+  - name: camera_name
+    description: "Camera / sensor name (stored in FITS header)"
+    type: string
+    required: false
+
+  # ── Target metadata ──────────────────────────────────────────────────────
+  - name: target_name
+    description: "Target object name (stored in FITS OBJECT field)"
+    type: string
+    required: false
+
+  - name: target_ra
+    description: "Target Right Ascension in hours (stored in FITS header)"
+    type: float
+    required: false
+    min: 0.0
+    max: 24.0
+
+  - name: target_dec
+    description: "Target Declination in degrees (stored in FITS header)"
+    type: float
+    required: false
+    min: -90.0
+    max: 90.0
+
+  - name: target_epoch
+    description: "Coordinate epoch (e.g. J2000)"
+    type: string
+    required: false
+    default: "J2000"

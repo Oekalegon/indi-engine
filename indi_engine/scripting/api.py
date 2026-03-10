@@ -75,10 +75,14 @@ class IndiScriptApi:
         indi_client: PurePythonIndiClient,
         update_bus: PropertyUpdateBus,
         cancel_event: threading.Event,
+        run_id: str = None,
+        blob_register: Callable[[str, str], None] = None,
     ) -> None:
         self._client = indi_client
         self._bus = update_bus
         self._cancel = cancel_event
+        self._run_id = run_id
+        self._blob_register = blob_register
 
     # ------------------------------------------------------------------
     # Read operations
@@ -160,6 +164,49 @@ class IndiScriptApi:
         """Send a CONNECTION/DISCONNECT command to the device."""
         self._require_not_cancelled()
         self._client.disconnectDevice(device)
+
+    def enable_blobs(
+        self,
+        device: str,
+        mode: str = "Also",
+        capture_params: dict = None,
+    ) -> None:
+        """Enable BLOB (image data) reception for a device.
+
+        Must be called before triggering an exposure — without it the INDI
+        server will not send image data to the engine.
+
+        Also registers this script run as the owner of incoming frames for
+        this device, so frame_ready events carry the correct run_id and
+        capture metadata (exposure, gain, binning, etc.).
+
+        Args:
+            device: CCD device name.
+            mode: INDI BLOB mode. "Also" receives BLOBs alongside other
+                  messages (default). "Only" receives BLOBs exclusively.
+                  "Never" disables BLOB reception.
+            capture_params: Optional dict of capture settings to embed in
+                  frame metadata (e.g. exposure, gain, bin_x, frame_type).
+        """
+        self._require_not_cancelled()
+        self._client.setBLOBMode(mode, device)
+        if self._blob_register and self._run_id:
+            self._blob_register(device, self._run_id, capture_params)
+
+    def update_blob_params(self, device: str, capture_params: dict) -> None:
+        """Update the capture metadata for the next incoming BLOB from a device.
+
+        Call this before each exposure in a sequence to set per-frame metadata
+        (e.g. frame_index) without re-sending the BLOB mode command to the INDI
+        server. enable_blobs() must have been called first.
+
+        Args:
+            device: CCD device name.
+            capture_params: Dict of capture settings to embed in frame metadata.
+        """
+        self._require_not_cancelled()
+        if self._blob_register and self._run_id:
+            self._blob_register(device, self._run_id, capture_params)
 
     # ------------------------------------------------------------------
     # Blocking wait operations

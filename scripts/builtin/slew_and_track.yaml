@@ -1,0 +1,20 @@
+capability_id: slew_telescope_and_track
+description: "Slew the telescope to RA/DEC coordinates and start tracking."
+params:
+  - name: ra
+    description: "Right Ascension in hours"
+    type: float
+    required: true
+    min: 0.0
+    max: 24.0
+  - name: dec
+    description: "Declination in degrees"
+    type: float
+    required: true
+    min: -90.0
+    max: 90.0
+  - name: device
+    description: "Telescope device name"
+    type: string
+    required: false
+    default: "Telescope Simulator"

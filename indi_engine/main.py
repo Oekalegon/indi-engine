@@ -2,6 +2,7 @@ import argparse
 import logging
 import signal
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from indi_engine import config
 from indi_engine.indi.client import IndiClient
@@ -19,6 +20,7 @@ from indi_engine.state.manager import DeviceStateManager
 from indi_engine.scripting.api import PropertyUpdateBus
 from indi_engine.scripting.registry import ScriptRegistry
 from indi_engine.scripting.runner import ScriptRunner
+from indi_engine.frames.store import FrameStore
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -98,14 +100,19 @@ def main():
     capabilities = _parse_capabilities(engine_cfg.get("capabilities", []))
     cap_ids = [c["id"] for c in capabilities]
 
+    frames_cfg = cfg.get("frames", {})
+    frame_store = FrameStore(data_dir=frames_cfg.get("data_dir", "data/frames"))
+
     socket_server.set_server_manager(server_manager)
     socket_server.set_engine_identity(engine_identity)
     socket_server.set_capabilities(capabilities)
+    socket_server.set_frame_store(frame_store)
     socket_server.start()
 
     # Wire INDI client and scripting only when this engine connects to an INDI server
     script_runner = None
     client = None
+    _blob_executor = None
     if indi_cfg and indi_cfg.get("connect", True):
         state_manager = DeviceStateManager()
         client = IndiClient(host=indi_host, port=indi_port, state_manager=state_manager)
@@ -142,10 +149,36 @@ def main():
             msg["provenance"] = [_indi_server_id]
             socket_server.broadcast(msg)
 
+        _blob_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="blob")
+
+        def _save_blob(device_name, data, blob_format):
+            try:
+                ctx = script_runner.get_blob_context_for_device(device_name) if script_runner else None
+                meta = frame_store.save(
+                    device=device_name,
+                    data=data,
+                    blob_format=blob_format,
+                    run_id=ctx["run_id"] if ctx else None,
+                    capture_params=ctx["capture_params"] if ctx else None,
+                )
+                socket_server.broadcast({"type": "frame_ready", **meta})
+            except Exception:
+                logger.exception("Failed to save BLOB from %s", device_name)
+
+        def _on_new_blob(prop):
+            for elem in prop.elements.values():
+                data = elem.value
+                if not isinstance(data, (bytes, bytearray)) or not data:
+                    continue
+                # Offload disk I/O to a thread so the INDI reader thread is not
+                # blocked and can immediately process the following state=Ok update.
+                _blob_executor.submit(_save_blob, prop.device_name, bytes(data), elem.blob_format or ".fits")
+
         client.newProperty         = _on_new_property
         client.updateProperty      = _on_update_property
         client.newMessage          = _on_new_message
         client.newUniversalMessage = _on_universal_message
+        client.newBLOB             = _on_new_blob
 
         # Wire scripting engine
         scripting_cfg = cfg.get("scripting", {})
@@ -251,6 +284,8 @@ def main():
     discovery.stop()
     if script_runner:
         script_runner.shutdown()
+    if _blob_executor:
+        _blob_executor.shutdown(wait=True)
     socket_server.stop()
     if client:
         client.disconnectServer()

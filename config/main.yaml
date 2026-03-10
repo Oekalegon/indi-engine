@@ -43,6 +43,10 @@ engine:
   # Both support an optional devices list to subscribe to specific devices only.
   subscriptions: []
 
+frames:
+  # Directory where captured image frames (FITS files) are stored locally.
+  data_dir: "data/frames"
+
 scripting:
   # Directory for built-in scripts shipped with the engine (read-only)
   builtin_dir: "scripts/builtin"

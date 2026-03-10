@@ -173,9 +173,16 @@ Server-level messages without a device use `null` for the `device` field:
 | `engine_offline` | engine → client | Broadcast when a peer engine disappears from mDNS |
 | `server_control` | client → engine | Start, stop, or restart indiserver |
 | `server_status` | engine → client | Current indiserver state broadcast after any `server_control` command |
-| `script_control` | client → engine | List, run, cancel, upload, delete, or list active runs of scripts |
+| `frame_control` | client → engine | List, retrieve, or delete captured image frames |
+| `frame_ready` | engine → client | Broadcast when a new frame has been saved to disk |
+| `frame_list` | engine → client | Response to `frame_control` `list` action |
+| `frame_data` | engine → client | Response to `frame_control` `get` action — base64 image bytes |
+| `frame_delete_ack` | engine → client | Response to `frame_control` `delete` action |
+| `frame_error` | engine → client | Error response to any failed `frame_control` action |
+| `script_control` | client → engine | List, describe, run, cancel, upload, delete, or list active runs of scripts |
 | `script_status` | engine → client | Script lifecycle and progress updates broadcast to all clients |
 | `script_list` | engine → client | Response to `script_control` `list` action |
+| `script_info` | engine → client | Response to `script_control` `info` action — full script metadata |
 | `script_runs` | engine → client | Response to `script_control` `list_runs` action |
 | `script_cancel_ack` | engine → client | Response to `script_control` `cancel` action |
 | `script_upload_ack` | engine → client | Response to `script_control` `upload` action |
@@ -366,6 +373,7 @@ Well-known capability IDs:
 |----|---------|
 | `indi_proxy` | Engine forwards INDI device data from an indiserver |
 | `slew_telescope_and_track` | Engine can slew a telescope to given coordinates and start tracking |
+| `capture_frame` | Engine can capture a single light frame with a CCD camera |
 | `capture_dark_frames` | Engine can capture a series of dark frames |
 | `custom_scripts` | Engine accepts arbitrary user-uploaded scripts |
 
@@ -437,6 +445,176 @@ Sent only to the requesting client.
     ]
 }
 ```
+
+---
+
+## Frames
+
+When a CCD camera completes an exposure, the engine receives the image data from the INDI server as a BLOB and stores it locally on disk (`data/frames/` by default). A `frame_ready` event is then broadcast to all subscribed clients. Clients can later retrieve the binary data and, once they have verified it, ask the engine to delete it.
+
+Scripts must call `indi.enable_blobs(device)` before triggering an exposure so the INDI server knows to send image data to the engine.
+
+### frame_ready — new frame saved
+
+Broadcast to all subscribed clients immediately after the engine saves an incoming image.
+
+| field | type | description |
+|-------|------|-------------|
+| `type` | string | `"frame_ready"` |
+| `frame_id` | string | UUID identifying this frame |
+| `device` | string | CCD device that produced the image |
+| `run_id` | string \| null | Script run that triggered the capture, or `null` |
+| `timestamp` | string | ISO 8601 UTC timestamp |
+| `hash` | string | SHA-256 hex digest of the stored bytes |
+| `size` | integer | File size in bytes |
+| `format` | string | File extension, e.g. `".fits"` |
+| `capture` | object | Capture settings used for this frame (see below) |
+
+The `capture` object contains the settings that were active when the exposure was taken:
+
+| field | type | description |
+|-------|------|-------------|
+| `exposure` | number | Exposure duration in seconds |
+| `frame_type` | string | `"light"`, `"dark"`, `"flat"`, `"bias"`, or `"dark_flat"` |
+| `frame_index` | integer | 1-based position of this frame within the sequence |
+| `count` | integer | Total number of frames in the sequence |
+| `gain` | number \| null | Sensor gain, or `null` if not set |
+| `offset` | number \| null | Sensor offset (black level), or `null` if not set |
+| `bin_x` | integer | Horizontal binning factor |
+| `bin_y` | integer | Vertical binning factor |
+| `frame_x` | integer \| null | Sub-frame X origin (pixels), or `null` for full sensor |
+| `frame_y` | integer \| null | Sub-frame Y origin (pixels), or `null` for full sensor |
+| `frame_w` | integer \| null | Sub-frame width (pixels), or `null` for full sensor |
+| `frame_h` | integer \| null | Sub-frame height (pixels), or `null` for full sensor |
+| `filter_name` | string \| null | Filter used, or `null` if no filter wheel |
+| `cooler_temp` | number \| null | Target cooler temperature in °C, or `null` if cooler not used |
+| `sensor_temp` | number \| null | Actual sensor temperature in °C at the moment of exposure, or `null` if unavailable |
+
+```json
+{
+    "type": "frame_ready",
+    "frame_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+    "device": "CCD Simulator",
+    "run_id": "a1b2c3d4…",
+    "timestamp": "2026-03-08T21:00:00+00:00",
+    "hash": "e3b0c44298fc1c14…",
+    "size": 2880,
+    "format": ".fits",
+    "capture": {
+        "exposure": 30.0,
+        "frame_type": "light",
+        "frame_index": 4,
+        "count": 10,
+        "gain": 100,
+        "offset": 10,
+        "bin_x": 1,
+        "bin_y": 1,
+        "frame_x": null,
+        "frame_y": null,
+        "frame_w": null,
+        "frame_h": null,
+        "filter_name": "Ha",
+        "cooler_temp": -10.0,
+        "sensor_temp": -9.8
+    }
+}
+```
+
+### frame_control — client managing frames
+
+#### list — list all stored frames
+
+```json
+{ "type": "frame_control", "action": "list" }
+```
+
+Response (`frame_list`) sent to the requester:
+
+```json
+{
+    "type": "frame_list",
+    "frames": [
+        {
+            "frame_id": "3f2504e0-…",
+            "device": "CCD Simulator",
+            "run_id": "a1b2c3d4…",
+            "timestamp": "2026-03-08T21:00:00+00:00",
+            "hash": "e3b0c442…",
+            "size": 2880,
+            "format": ".fits",
+            "capture": {
+                "exposure": 30.0,
+                "frame_type": "light",
+                "frame_index": 4,
+                "count": 10,
+                "gain": 100,
+                "bin_x": 1,
+                "bin_y": 1,
+                "filter_name": "Ha",
+                "cooler_temp": -10.0,
+        "sensor_temp": -9.8
+            }
+        }
+    ]
+}
+```
+
+#### get — retrieve a frame
+
+```json
+{ "type": "frame_control", "action": "get", "frame_id": "3f2504e0-…" }
+```
+
+Response (`frame_data`) sent to the requester. The `data` field is the raw image bytes encoded as base64:
+
+```json
+{
+    "type": "frame_data",
+    "frame_id": "3f2504e0-…",
+    "device": "CCD Simulator",
+    "run_id": "a1b2c3d4…",
+    "hash": "e3b0c442…",
+    "format": ".fits",
+    "size": 2880,
+    "data": "<base64-encoded bytes>",
+    "capture": {
+        "exposure": 30.0,
+        "frame_type": "light",
+        "frame_index": 4,
+        "count": 10,
+        "gain": 100,
+        "bin_x": 1,
+        "bin_y": 1,
+        "filter_name": "Ha",
+        "cooler_temp": -10.0,
+        "sensor_temp": -9.8
+    }
+}
+```
+
+The client should verify that `SHA-256(base64_decode(data)) == hash` before accepting the image.
+
+#### delete — delete a frame after verification
+
+The client must supply the hash it received with the frame data. The engine re-checks the hash against the stored value before deleting, so a frame cannot be accidentally removed before the client has confirmed a good download.
+
+```json
+{ "type": "frame_control", "action": "delete", "frame_id": "3f2504e0-…", "hash": "e3b0c442…" }
+```
+
+Response (`frame_delete_ack`):
+
+```json
+{ "type": "frame_delete_ack", "frame_id": "3f2504e0-…", "ok": true }
+```
+
+### frame_error — error response
+
+```json
+{ "type": "frame_error", "message": "Frame '3f2504e0-…' not found" }
+```
+
+Common causes: unknown `frame_id`, hash mismatch on delete, frame store not available.
 
 ---
 
@@ -536,17 +714,62 @@ A `script_control` message is sent from an engine client to manage scripts.
 { "type": "script_control", "action": "list" }
 ```
 
-Response (`script_list`):
+Response (`script_list`). Each entry includes the capability ID and parameter list from the companion metadata file:
 
 ```json
 {
     "type": "script_list",
     "scripts": [
-        { "name": "slew_and_track", "description": "Slew the telescope to RA/DEC coordinates and start tracking.", "builtin": true },
-        { "name": "dark_frames",    "description": "Take a series of dark frames.",                                "builtin": true }
+        {
+            "name": "slew_and_track",
+            "builtin": true,
+            "capability_id": "slew_telescope_and_track",
+            "description": "Slew the telescope to RA/DEC coordinates and start tracking.",
+            "params": [
+                {"name": "ra",  "description": "Right Ascension in hours", "type": "float", "required": true,  "min": 0.0, "max": 24.0},
+                {"name": "dec", "description": "Declination in degrees",   "type": "float", "required": true,  "min": -90.0, "max": 90.0},
+                {"name": "device", "description": "Telescope device name", "type": "string", "required": false, "default": "Telescope Simulator"}
+            ]
+        }
     ]
 }
 ```
+
+#### info — get full metadata for a single script
+
+```json
+{ "type": "script_control", "action": "info", "name": "slew_and_track" }
+```
+
+Response (`script_info`) sent to the requester:
+
+```json
+{
+    "type": "script_info",
+    "name": "slew_and_track",
+    "builtin": true,
+    "capability_id": "slew_telescope_and_track",
+    "description": "Slew the telescope to RA/DEC coordinates and start tracking.",
+    "params": [
+        {"name": "ra",     "description": "Right Ascension in hours", "type": "float",  "required": true,  "min": 0.0,   "max": 24.0},
+        {"name": "dec",    "description": "Declination in degrees",   "type": "float",  "required": true,  "min": -90.0, "max": 90.0},
+        {"name": "device", "description": "Telescope device name",    "type": "string", "required": false, "default": "Telescope Simulator"}
+    ]
+}
+```
+
+Each parameter object has:
+
+| field | type | description |
+|-------|------|-------------|
+| `name` | string | Parameter name (used as key in `params` when running) |
+| `description` | string | Human-readable description |
+| `type` | string | `"float"`, `"int"`, `"string"`, or `"bool"` |
+| `required` | boolean | Whether the parameter must be supplied |
+| `default` | any | Default value when `required` is false |
+| `min` | number | (numeric types) Minimum allowed value |
+| `max` | number | (numeric types) Maximum allowed value |
+| `step` | number | (numeric types) Suggested step for UI sliders |
 
 #### run — run a script
 
