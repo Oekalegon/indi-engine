@@ -13,6 +13,7 @@ from indi_engine.indi.server import (
 )
 from indi_engine.server.socket_server import SocketServer
 from indi_engine.server.serializer import serialize_property, serialize_message
+from indi_engine.indi.device_classifier import classify_device
 from indi_engine.network.identity import EngineIdentity
 from indi_engine.network.peer import PeerConnection
 from indi_engine.network.discovery import EngineDiscovery
@@ -130,6 +131,20 @@ def main():
             msg = serialize_property(prop, "def")
             msg["provenance"] = [_indi_server_id]
             socket_server.broadcast(msg)
+
+            # Classify device on each new property; broadcast whenever the
+            # detected roles list changes (grows as more properties arrive).
+            device = client._devices.get(prop.device_name)
+            if device is not None:
+                new_types = classify_device(set(device.properties.keys()))
+                if new_types != device.device_types:
+                    device.device_types = new_types
+                    socket_server.broadcast({
+                        "type": "device_type",
+                        "device": device.name,
+                        "device_types": new_types,
+                        "provenance": [_indi_server_id],
+                    })
 
         def _on_update_property(prop):
             _orig_updateProperty(prop)

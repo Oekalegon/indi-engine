@@ -157,6 +157,7 @@ Server-level messages without a device use `null` for the `device` field:
 | `set` | engine → client | Property value update from the INDI server |
 | `new` | client → engine | Command a new property value; engine forwards to INDI server |
 | `message` | engine → client | Log message from INDI server or engine component |
+| `device_type` | engine → client | Broadcast when a device's functional role(s) are determined; also included in subscribe snapshot |
 | `subscribe` | client → engine | Subscribe to all messages or a specific device |
 | `subscribe_ack` | engine → client | Subscription confirmed; state snapshot follows |
 | `unsubscribe` | client → engine | Remove a subscription |
@@ -234,7 +235,7 @@ Clients receive **no messages** until they subscribe. This applies to both regul
 { "type": "subscribe", "device": "Telescope Simulator" }
 ```
 
-After a successful subscription the engine immediately sends a state snapshot: all current `def` messages for the subscribed devices. Subsequent updates arrive as `set` messages.
+After a successful subscription the engine immediately sends a state snapshot: all current `def` messages for the subscribed devices, followed by a `device_type` message for each device whose type has already been determined. Subsequent updates arrive as `set` and `device_type` messages.
 
 ### subscribe_ack — engine confirming subscription
 
@@ -298,6 +299,7 @@ Response (`device_info`) sent to the requester. Properties are included without 
     "type": "device_info",
     "device": "Telescope Simulator",
     "connected": true,
+    "device_types": ["mount"],
     "properties": [
         {
             "property": "EQUATORIAL_EOD_COORD",
@@ -320,6 +322,49 @@ Sent to the requester when a `device_control` action fails (e.g. unknown device,
 ```json
 { "type": "device_error", "message": "Unknown device: Foo" }
 ```
+
+---
+
+## Device type classification
+
+INDI devices do not announce their type explicitly. The engine determines functional roles automatically from the standard property names each device registers, using the [INDI Standard Properties](https://docs.indilib.org/drivers/standard-properties/) specification.
+
+### device_type — device role(s) determined
+
+Broadcast to all subscribed clients when a device's role list is first established or grows (some properties arrive later than others). Also sent as part of the subscribe state snapshot for devices already classified.
+
+| field | type | description |
+|-------|------|-------------|
+| `type` | string | `"device_type"` |
+| `device` | string | Device name |
+| `device_types` | array of strings | All detected functional roles, in canonical order |
+| `provenance` | array | (broadcast only) Origin chain; omitted in subscribe snapshots |
+
+Possible role values: `"mount"`, `"camera"`, `"focuser"`, `"filter_wheel"`, `"rotator"`, `"dome"`, `"weather"`, `"gps"`.
+
+A device may have more than one role (e.g. a camera with a built-in filter wheel). The list is empty until at least one role is detected.
+
+```json
+{
+    "type": "device_type",
+    "device": "CCD Simulator",
+    "device_types": ["camera"],
+    "provenance": ["indi://localhost:7624"]
+}
+```
+
+Example with multiple roles (camera with integrated filter wheel):
+
+```json
+{
+    "type": "device_type",
+    "device": "QSI Camera",
+    "device_types": ["camera", "filter_wheel"],
+    "provenance": ["indi://localhost:7624"]
+}
+```
+
+The `device_types` field is also present in `device_info` responses (see above).
 
 ---
 
