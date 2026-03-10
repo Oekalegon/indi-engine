@@ -142,7 +142,7 @@ class IndiXmlParser:
 
         for elem in root.findall(elem_tag):
             name = elem.get("name", "")
-            value_str = elem.text or "0"
+            value_str = (elem.text or "0").strip()
             element = {
                 "name": name,
                 "label": elem.get("label", ""),
@@ -165,7 +165,7 @@ class IndiXmlParser:
 
         for elem in root.findall(elem_tag):
             name = elem.get("name", "")
-            value = elem.text or ""
+            value = (elem.text or "").strip()
             element = {
                 "name": name,
                 "label": elem.get("label", ""),
@@ -185,7 +185,7 @@ class IndiXmlParser:
 
         for elem in root.findall(elem_tag):
             name = elem.get("name", "")
-            value = elem.text or "Off"
+            value = (elem.text or "Off").strip()
             element = {
                 "name": name,
                 "label": elem.get("label", ""),

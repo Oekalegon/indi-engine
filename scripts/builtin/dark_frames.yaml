@@ -1,0 +1,21 @@
+capability_id: capture_dark_frames
+description: "Take a series of dark frames with a CCD camera."
+params:
+  - name: count
+    description: "Number of frames to take"
+    type: int
+    required: false
+    default: 5
+    min: 1
+  - name: exposure
+    description: "Exposure duration in seconds"
+    type: float
+    required: false
+    default: 30.0
+    min: 0.001
+    max: 3600.0
+  - name: device
+    description: "CCD device name"
+    type: string
+    required: false
+    default: "CCD Simulator"

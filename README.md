@@ -1,12 +1,10 @@
 # INDI Engine
 
-A non-GUI middleware layer between an [INDI](https://indilib.org) server and clients. It keeps device state in memory and allows capturing sequences to continue when a client goes offline.
+A non-GUI middleware layer between an [INDI](https://indilib.org) server and clients. It keeps device state in memory, exposes a JSON socket API for remote clients, and allows capturing sequences to continue when a client goes offline.
 
 ## Prerequisites
 
 ### System dependencies
-
-INDI Engine uses [pyindi-client](https://github.com/indilib/pyindi-client), a Python wrapper around `libindi`. The native library must be installed before you can run the engine.
 
 **macOS (Homebrew)**
 ```bash
@@ -39,12 +37,51 @@ uv sync
 uv run indi-engine
 ```
 
-The engine connects to the INDI server on `localhost:7624` by default and logs all device and property events to stdout. Stop it with `Ctrl+C`.
+The engine connects to the INDI server on `localhost:7624` by default, keeps device state in memory, and listens for client connections on port `8624`.
 
-If `server.manage` is `true` in the config, the engine starts and stops `indiserver` automatically. Otherwise, start it yourself first:
+If `server.manage` is `true` in the config (the default), the engine starts and stops `indiserver` automatically. Otherwise, start it yourself first:
 
 ```bash
 indiserver -v indi_simulator_telescope indi_simulator_ccd
+```
+
+## CLI
+
+`engine-cli` connects to a running engine over TCP and lets you watch events, query device state, and control the INDI server — including from a remote machine.
+
+```bash
+# Stream all engine events
+uv run engine-cli watch
+
+# Connect to a remote engine
+uv run engine-cli --host 192.168.1.10 watch
+
+# Filter to one device, or show raw JSON
+uv run engine-cli watch --device "Telescope Simulator"
+uv run engine-cli watch --raw
+
+# List all known devices and their properties
+uv run engine-cli devices
+
+# Get the current value of a property
+uv run engine-cli get "Telescope Simulator" EQUATORIAL_EOD_COORD
+
+# Set a number property
+uv run engine-cli set number "Telescope Simulator" EQUATORIAL_EOD_COORD RA=10.5 DEC=45.0
+
+# Set a text property
+uv run engine-cli set text "Device" PROPERTY ELEM=value
+
+# Toggle a switch
+uv run engine-cli set switch "Telescope Simulator" CONNECTION CONNECT
+
+# Server control (works remotely)
+uv run engine-cli server status
+uv run engine-cli server start
+uv run engine-cli server start --drivers indi_simulator_telescope indi_simulator_ccd
+uv run engine-cli server stop
+uv run engine-cli server restart
+uv run engine-cli server restart --drivers indi_simulator_telescope
 ```
 
 ## Project structure
@@ -52,15 +89,17 @@ indiserver -v indi_simulator_telescope indi_simulator_ccd
 ```
 indi_engine/
 ├── main.py              # Entry point — starts server manager, connects client, runs loop
+├── cli.py               # engine-cli — remote CLI for watch, devices, get, set, server control
 ├── indi/
-│   ├── client.py        # IndiClient — receives device/property messages from INDI
-│   └── server.py        # IndiServerManager — starts/stops indiserver subprocess
-├── state/
-│   └── manager.py       # DeviceStateManager — keeps current device/property state
-├── server/
-│   └── socket_server.py # (stub) JSON socket server for client communication
-└── actions/
-    └── __init__.py      # (stub) Action system for telescope control sequences
+│   ├── protocol/
+│   │   ├── client.py    # PurePythonIndiClient — connects to indiserver, fires callbacks
+│   │   ├── transport.py # TCP connection and reader thread
+│   │   ├── parser.py    # INDI XML parser
+│   │   └── properties.py# Typed property and element models
+│   └── server.py        # ProcessServerManager / SystemdServerManager
+└── server/
+    ├── socket_server.py # JSON socket server — accepts clients, broadcasts events
+    └── serializer.py    # IProperty → JSON dict serialization
 ```
 
 ## Configuration
@@ -91,26 +130,208 @@ server:
 
   # Systemd-mode settings
   service_name: indiserver
+
+engine:
+  host: "0.0.0.0"
+  port: 8624
+  # Stable UUID for this engine. Set explicitly so other engines can reference
+  # it by ID in their subscriptions. If omitted, a random UUID is generated
+  # for this session only (not stable across restarts).
+  id: "550e8400-e29b-41d4-a716-446655440000"
+  name: "my-engine"     # "auto" uses the machine hostname
+  # Capabilities advertised to peers and clients.
+  # Plain string  → non-script capability
+  # {id: script}  → capability backed by a specific script file
+  capabilities:
+    - indi_proxy
+    - slew_telescope_and_track: slew_and_track.py
+    - custom_scripts   # engine accepts arbitrary user-uploaded scripts
+  subscriptions: []     # see "Multi-engine network" below
 ```
 
 ### Managing indiserver
 
 **Process mode** (default): The engine spawns indiserver directly as a subprocess.
-```bash
-uv run indi-engine
-```
 
 **Systemd mode**: The engine uses `systemctl` to manage a systemd unit. Useful on Linux servers where indiserver runs as a background service.
-```bash
-# Create a systemd unit (if not already installed)
-sudo systemctl enable indiserver
-
-# Start the engine (it will use systemctl to manage the service)
-uv run indi-engine
-```
 
 With `mode: auto`, the engine detects at startup which mode to use based on whether the service is running under systemd.
 
-### Drivers
+## Multi-engine network
 
-Drivers can be added or removed at runtime via `ProcessServerManager.add_driver()` / `remove_driver()` or `SystemdServerManager.add_driver()` / `remove_driver()` — the server restarts automatically with the updated driver list.
+Multiple engines can form a peer network. Each engine advertises itself via Bonjour/mDNS (`_indiengine._tcp.local.`) and can subscribe to message streams from other engines. Subscribed messages are forwarded to the engine's own clients with a `provenance` list that tracks the full chain of hops (INDI server → engine A → engine B → …).
+
+### Relay engine
+
+A relay engine has no INDI server connection — it subscribes to another engine and forwards its messages. Omit the `indi:` section entirely:
+
+```yaml
+# config/engine_b.yaml
+engine:
+  host: "0.0.0.0"
+  port: 8625
+  id: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+  name: "engine-b"
+  capabilities:
+    - indi_proxy
+  subscriptions:
+    - id: "550e8400-e29b-41d4-a716-446655440000"   # engine-a, resolved via mDNS
+```
+
+Start it with:
+```bash
+uv run indi-engine --config config/engine_b.yaml
+```
+
+### Subscription addressing
+
+Two modes are supported in the `subscriptions` list:
+
+**ID-based** (preferred) — engine ID resolved via mDNS; works regardless of the peer's IP address:
+```yaml
+subscriptions:
+  - id: "550e8400-e29b-41d4-a716-446655440000"
+    devices: ["Telescope Simulator"]   # optional — omit to subscribe to everything
+```
+
+**Direct** — host and port given explicitly; connects immediately without mDNS:
+```yaml
+subscriptions:
+  - host: 192.168.1.10
+    port: 8624
+```
+
+Both modes support an optional `devices` list to subscribe to specific devices only.
+
+### Provenance
+
+Every message broadcast by an engine carries a `provenance` field — an ordered list of identifiers showing where the message originated and which engines forwarded it:
+
+```json
+{
+  "type": "set",
+  "device": "Telescope Simulator",
+  "property": "EQUATORIAL_EOD_COORD",
+  "provenance": [
+    "indi://localhost:7624",
+    "550e8400-e29b-41d4-a716-446655440000",
+    "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+  ]
+}
+```
+
+Engines use the provenance list to prevent forwarding loops: a message is dropped if the engine's own ID is already present.
+
+### Discovery messages
+
+Subscribed clients receive `engine_online` / `engine_offline` events as peers appear and disappear on the network. You can also query the known engine list at any time:
+
+```json
+// request
+{"type": "engine_list_request"}
+
+// response
+{
+  "type": "engine_list_response",
+  "engines": [
+    {"engine_id": "550e...", "name": "engine-a", "host": "192.168.1.5", "port": 8624, "capabilities": ["indi_proxy", "scripting"]}
+  ]
+}
+```
+
+## Scripts
+
+Scripts are Python files that run inside a RestrictedPython sandbox. Built-in scripts live in `scripts/builtin/`; user-uploaded scripts are stored in `scripts/user/` and take precedence over builtins of the same name.
+
+### Writing a script
+
+Scripts have access to these globals:
+
+| global | description |
+|--------|-------------|
+| `indi` | INDI device API (see table below) |
+| `params` | Dict of parameters passed by the caller |
+| `log(msg, progress)` | Emit a progress update to all connected clients (`progress` is `0.0`–`1.0`) |
+| `time_utils` | `sleep(seconds)` and `now()` |
+| `math` | Standard math module |
+
+**`indi` API reference:**
+
+| method | description |
+|--------|-------------|
+| `connect_device(device)` | Connect a device via `CONNECTION/CONNECT` |
+| `disconnect_device(device)` | Disconnect a device |
+| `get_property(device, name)` | Return the `IProperty` object, or `None` |
+| `get_value(device, name, element)` | Return the current element value |
+| `set_number(device, name, values)` | Send a `newNumberVector` command |
+| `set_text(device, name, values)` | Send a `newTextVector` command |
+| `set_switch(device, name, values)` | Send a `newSwitchVector` command |
+| `wait_for_state(device, name, state, timeout)` | Block until the property reaches the given state (`"Idle"`, `"Ok"`, `"Busy"`, `"Alert"`) |
+| `wait_for_value(device, name, element, predicate, timeout)` | Block until `predicate(value)` returns `True` |
+| `enable_blobs(device, mode, capture_params)` | Activate BLOB (image) reception for a device and register this run as the owner of incoming frames. Must be called once before the first exposure. `capture_params` is embedded in every `frame_ready` message. |
+| `update_blob_params(device, capture_params)` | Update the capture metadata for the next incoming BLOB without re-sending the BLOB mode command to the INDI server. Use this inside a capture loop to set per-frame fields like `frame_index`. |
+
+```python
+"""Capture a short sequence of light frames."""
+device   = params.get("device",   "CCD Simulator")
+exposure = params.get("exposure", 10.0)
+count    = params.get("count",    1)
+
+indi.connect_device(device)
+indi.set_switch(device, "CCD_FRAME_TYPE", {"FRAME_LIGHT": "On"})
+indi.enable_blobs(device, capture_params={"exposure": exposure, "count": count})
+
+for i in range(count):
+    indi.update_blob_params(device, {"exposure": exposure, "frame_index": i + 1, "count": count})
+    indi.set_number(device, "CCD_EXPOSURE", {"CCD_EXPOSURE_VALUE": exposure})
+    indi.wait_for_state(device, "CCD_EXPOSURE", "Busy", timeout=10.0)
+    ok = indi.wait_for_state(device, "CCD_EXPOSURE", "Ok", timeout=exposure + 60)
+    log(f"Frame {i + 1}/{count}", (i + 1) / count)
+
+log("Done", 1.0)
+```
+
+### Script metadata YAML
+
+Each script can have a companion `.yaml` file with the same stem (e.g. `capture_frame.py` → `capture_frame.yaml`). The metadata is used in `script_list` / `script_info` responses and in capability declarations.
+
+```yaml
+capability_id: capture_frame           # standardised capability identifier
+description: "Capture a single light frame with a CCD camera."
+params:
+  - name: exposure
+    description: "Exposure duration in seconds"
+    type: float          # float | int | string | bool
+    required: false
+    default: 10.0
+    min: 0.001
+    max: 3600.0
+    # step: 1.0          # optional — suggested UI step size
+
+  - name: device
+    description: "CCD device name"
+    type: string
+    required: false
+    default: "CCD Simulator"
+```
+
+If no YAML file is present the engine falls back to the module docstring for the description and treats all parameters as untyped.
+
+### Declaring script-backed capabilities
+
+Reference a script in `config/main.yaml` using `{capability_id: script_filename}` syntax:
+
+```yaml
+engine:
+  capabilities:
+    - indi_proxy
+    - capture_frame: capture_frame.py
+    - slew_telescope_and_track: slew_and_track.py
+    - custom_scripts
+```
+
+---
+
+## Protocol
+
+The engine exposes a TCP socket on port `8624`. Messages are newline-delimited JSON. See [docs/protocol.md](docs/protocol.md) for the full message format reference including `def`, `set`, `new`, `message`, `server_control`, and `server_status`.

@@ -20,3 +20,39 @@ server:
 
   # Used when mode is 'systemd'
   service_name: indiserver
+
+engine:
+  host: "0.0.0.0"
+  port: 8624
+  # Stable UUID for this engine. Set explicitly so other engines can reference
+  # it by ID in their subscriptions. If omitted, a random UUID is generated
+  # for this session only (not stable across restarts).
+  id: "550e8400-e29b-41d4-a716-446655440000"
+  # Human-readable name for this engine. "auto" uses the machine hostname.
+  name: "auto"
+  # Capabilities this engine advertises to peers and clients.
+  # Plain string → non-script capability (e.g. indi_proxy, custom_scripts)
+  # {id: script} → script-backed capability; value is the script filename
+  capabilities:
+    - indi_proxy
+    - slew_telescope_and_track: slew_and_track.py
+    - custom_scripts
+  # Remote engines to subscribe to at startup. Two addressing modes:
+  #   Direct:   {host: "192.168.1.10", port: 8624}
+  #   ID-based: {id: "<engine-uuid>"}   ← resolved via mDNS, no host/port needed
+  # Both support an optional devices list to subscribe to specific devices only.
+  subscriptions: []
+
+frames:
+  # Directory where captured image frames (FITS files) are stored locally.
+  data_dir: "data/frames"
+
+scripting:
+  # Directory for built-in scripts shipped with the engine (read-only)
+  builtin_dir: "scripts/builtin"
+  # Directory for user-uploaded scripts (writeable)
+  user_dir: "scripts/user"
+  # Maximum number of concurrently running scripts
+  max_workers: 4
+  # Hard wall-clock time limit per script run (seconds)
+  default_timeout: 3600
