@@ -147,6 +147,23 @@ if filter_device and filter_name:
 
 # ── Capture loop ─────────────────────────────────────────────────────────────
 for i in range(count):
+    # Checkpoint before the exposure: if paused here (or mid-exposure with
+    # finish_current=False), the resume command re-does this frame.
+    indi.checkpoint({
+        "device": device, "count": count - i, "exposure": exposure,
+        "delay": delay, "frame_type": frame_type,
+        "gain": gain, "offset": offset, "bin_x": bin_x, "bin_y": bin_y,
+        "frame_x": frame_x, "frame_y": frame_y, "frame_w": frame_w, "frame_h": frame_h,
+        "format": format_, "filter_device": filter_device, "filter_name": filter_name,
+        "cooler_temp": cooler_temp,
+        "telescope_name": telescope_name, "focal_length": focal_length,
+        "aperture": aperture, "pixel_size_x": pixel_size_x, "pixel_size_y": pixel_size_y,
+        "sensor_width_px": sensor_width_px, "sensor_height_px": sensor_height_px,
+        "camera_name": camera_name,
+        "target_name": target_name, "target_ra": target_ra,
+        "target_dec": target_dec, "target_epoch": target_epoch,
+    })
+
     frame_label = f"frame {i + 1}/{count}" if count > 1 else "frame"
     log(f"Capturing {frame_label} — {exposure}s {frame_type}…", progress=i / count)
 
@@ -179,6 +196,24 @@ for i in range(count):
         break
 
     log(f"Captured {frame_label}", progress=(i + 1) / count)
+
+    if i + 1 < count:
+        # Checkpoint after completing this frame: if paused during the delay
+        # (or at the start of the next iteration), resume skips to the next frame.
+        indi.checkpoint({
+            "device": device, "count": count - (i + 1), "exposure": exposure,
+            "delay": delay, "frame_type": frame_type,
+            "gain": gain, "offset": offset, "bin_x": bin_x, "bin_y": bin_y,
+            "frame_x": frame_x, "frame_y": frame_y, "frame_w": frame_w, "frame_h": frame_h,
+            "format": format_, "filter_device": filter_device, "filter_name": filter_name,
+            "cooler_temp": cooler_temp,
+            "telescope_name": telescope_name, "focal_length": focal_length,
+            "aperture": aperture, "pixel_size_x": pixel_size_x, "pixel_size_y": pixel_size_y,
+            "sensor_width_px": sensor_width_px, "sensor_height_px": sensor_height_px,
+            "camera_name": camera_name,
+            "target_name": target_name, "target_ra": target_ra,
+            "target_dec": target_dec, "target_epoch": target_epoch,
+        })
 
     if delay > 0 and i < count - 1:
         log(f"Waiting {delay}s before next frame…", progress=(i + 1) / count)

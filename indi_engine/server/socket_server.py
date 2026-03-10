@@ -140,6 +140,16 @@ class SocketServer:
                     conn.sendall(data)
                 except OSError:
                     return
+            if dev.device_types:
+                try:
+                    msg = {
+                        "type": "device_type",
+                        "device": dev.name,
+                        "device_types": dev.device_types,
+                    }
+                    conn.sendall((json.dumps(msg) + "\n").encode("utf-8"))
+                except OSError:
+                    return
 
     def _handle_client(self, conn: socket.socket) -> None:
         # Use select() rather than settimeout() so that conn stays in blocking
@@ -505,6 +515,12 @@ class SocketServer:
                 run_id = msg["run_id"]
                 ok = self._script_runner.cancel(run_id)
                 self._send_to(requester, {"type": "script_cancel_ack", "run_id": run_id, "ok": ok})
+
+            elif action == "pause":
+                run_id = msg["run_id"]
+                finish_current = msg.get("finish_current", True)
+                ok = self._script_runner.pause(run_id, finish_current=finish_current)
+                self._send_to(requester, {"type": "script_pause_ack", "run_id": run_id, "ok": ok})
 
             elif action == "upload":
                 name = msg["name"]

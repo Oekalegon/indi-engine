@@ -273,6 +273,7 @@ class IDevice:
     name: str
     properties: Dict[str, IProperty] = field(default_factory=dict)
     messages: List[str] = field(default_factory=list)
+    device_types: List[str] = field(default_factory=list)
 
     def getDeviceName(self) -> str:
         """Get device name."""

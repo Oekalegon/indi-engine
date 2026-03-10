@@ -19,6 +19,7 @@ from indi_engine.scripting.api import (
     TimeScriptApi,
     PropertyUpdateBus,
     ScriptCancelledError,
+    ScriptPausedError,
 )
 from indi_engine.scripting.registry import ScriptRegistry
 from indi_engine.server.serializer import serialize_script_status
@@ -31,6 +32,8 @@ class _RunHandle:
     run_id: str
     name: str
     cancel_event: threading.Event
+    pause_immediate_event: threading.Event
+    pause_deferred_event: threading.Event
     started_at: float = field(default_factory=_time.monotonic)
 
 
@@ -88,8 +91,16 @@ class ScriptRunner:
         code = compile_script(source, filename=name + ".py")
         run_id = uuid.uuid4().hex
         cancel_event = threading.Event()
+        pause_immediate_event = threading.Event()
+        pause_deferred_event = threading.Event()
 
-        handle = _RunHandle(run_id=run_id, name=name, cancel_event=cancel_event)
+        handle = _RunHandle(
+            run_id=run_id,
+            name=name,
+            cancel_event=cancel_event,
+            pause_immediate_event=pause_immediate_event,
+            pause_deferred_event=pause_deferred_event,
+        )
         with self._runs_lock:
             self._runs[run_id] = handle
 
@@ -103,7 +114,8 @@ class ScriptRunner:
             )
 
         future = self._executor.submit(
-            self._execute, run_id, name, code, params or {}, cancel_event, log
+            self._execute, run_id, name, code, params or {},
+            cancel_event, pause_immediate_event, pause_deferred_event, log
         )
         future.add_done_callback(lambda f: self._on_done(f, run_id, name))
         return run_id
@@ -121,6 +133,29 @@ class ScriptRunner:
             handle.cancel_event.set()
             return True
         return False
+
+    def pause(self, run_id: str, finish_current: bool = True) -> bool:
+        """Request a pause of a running script.
+
+        Args:
+            run_id: The run to pause.
+            finish_current: If True, the script pauses at its next checkpoint()
+                call (i.e. after finishing the current unit of work such as an
+                exposure). If False, the script is interrupted immediately
+                during the next wait_for_state, wait_for_value, or sleep call.
+
+        Returns:
+            True if the run_id was found, False if unknown or already finished.
+        """
+        with self._runs_lock:
+            handle = self._runs.get(run_id)
+        if not handle:
+            return False
+        if finish_current:
+            handle.pause_deferred_event.set()
+        else:
+            handle.pause_immediate_event.set()
+        return True
 
     def register_blob_device(
         self, device: str, run_id: str, capture_params: dict | None = None
@@ -164,6 +199,8 @@ class ScriptRunner:
         code,
         params: dict,
         cancel_event: threading.Event,
+        pause_immediate_event: threading.Event,
+        pause_deferred_event: threading.Event,
         log: Callable,
     ) -> None:
         api = IndiScriptApi(
@@ -172,8 +209,14 @@ class ScriptRunner:
             cancel_event,
             run_id=run_id,
             blob_register=self.register_blob_device,
+            pause_immediate=pause_immediate_event,
+            pause_deferred=pause_deferred_event,
         )
-        time_api = TimeScriptApi(cancel_event)
+        time_api = TimeScriptApi(
+            cancel_event,
+            pause_immediate=pause_immediate_event,
+            get_checkpoint=lambda: api._last_checkpoint,
+        )
         g = make_restricted_globals({
             "indi": api,
             "time_utils": time_api,
@@ -198,6 +241,19 @@ class ScriptRunner:
         except ScriptCancelledError:
             self._broadcast(
                 serialize_script_status(run_id, name, "cancelled", "Script cancelled", 0.0)
+            )
+        except ScriptPausedError as e:
+            resume_command = None
+            if e.resume_params is not None:
+                resume_command = {
+                    "type": "script_control",
+                    "action": "run",
+                    "name": name,
+                    "params": e.resume_params,
+                }
+            self._broadcast(
+                serialize_script_status(run_id, name, "paused", "Script paused", 0.0,
+                                        resume_command=resume_command)
             )
         except Exception as e:
             logger.error("Script '%s' (run %s) failed: %s", name, run_id, e)

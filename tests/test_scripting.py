@@ -14,6 +14,7 @@ from indi_engine.scripting.api import (
     IndiScriptApi,
     PropertyUpdateBus,
     ScriptCancelledError,
+    ScriptPausedError,
     TimeScriptApi,
 )
 from indi_engine.scripting.registry import ScriptRegistry
@@ -594,3 +595,287 @@ class TestSerializeScriptStatus:
         result = serialize_script_status("id", "name", "finished")
         assert result["message"] == ""
         assert result["progress"] == 0.0
+
+    def test_resume_command_included_when_provided(self):
+        from indi_engine.server.serializer import serialize_script_status
+
+        resume = {"type": "script_control", "action": "run", "name": "capture_frame", "params": {"count": 5}}
+        result = serialize_script_status("id", "name", "paused", resume_command=resume)
+        assert result["resume_command"] == resume
+
+    def test_resume_command_absent_when_not_provided(self):
+        from indi_engine.server.serializer import serialize_script_status
+
+        result = serialize_script_status("id", "name", "finished")
+        assert "resume_command" not in result
+
+
+# ---------------------------------------------------------------------------
+# ScriptPausedError tests
+# ---------------------------------------------------------------------------
+
+
+class TestScriptPausedError:
+    def test_default_resume_params_is_none(self):
+        err = ScriptPausedError()
+        assert err.resume_params is None
+
+    def test_resume_params_stored(self):
+        params = {"count": 3, "exposure": 10.0}
+        err = ScriptPausedError(params)
+        assert err.resume_params == params
+
+    def test_is_exception(self):
+        assert isinstance(ScriptPausedError(), Exception)
+
+
+# ---------------------------------------------------------------------------
+# IndiScriptApi checkpoint / pause tests
+# ---------------------------------------------------------------------------
+
+
+class TestCheckpoint:
+    def test_checkpoint_stores_last_checkpoint(self):
+        client = _make_mock_client()
+        api = IndiScriptApi(client, PropertyUpdateBus(), threading.Event())
+        params = {"count": 5, "exposure": 10.0}
+        api.checkpoint(params)
+        assert api._last_checkpoint == params
+
+    def test_checkpoint_raises_paused_when_deferred_event_set(self):
+        client = _make_mock_client()
+        pause_deferred = threading.Event()
+        pause_deferred.set()
+        api = IndiScriptApi(client, PropertyUpdateBus(), threading.Event(),
+                            pause_deferred=pause_deferred)
+        with pytest.raises(ScriptPausedError) as exc_info:
+            api.checkpoint({"count": 2})
+        assert exc_info.value.resume_params == {"count": 2}
+
+    def test_checkpoint_raises_paused_when_immediate_event_set(self):
+        client = _make_mock_client()
+        pause_immediate = threading.Event()
+        pause_immediate.set()
+        api = IndiScriptApi(client, PropertyUpdateBus(), threading.Event(),
+                            pause_immediate=pause_immediate)
+        with pytest.raises(ScriptPausedError):
+            api.checkpoint({"count": 1})
+
+    def test_checkpoint_raises_cancelled_before_pause(self):
+        client = _make_mock_client()
+        cancel = threading.Event()
+        cancel.set()
+        pause_deferred = threading.Event()
+        pause_deferred.set()
+        api = IndiScriptApi(client, PropertyUpdateBus(), cancel,
+                            pause_deferred=pause_deferred)
+        # cancel takes priority over pause
+        with pytest.raises(ScriptCancelledError):
+            api.checkpoint({"count": 1})
+
+    def test_checkpoint_no_raise_when_no_pause(self):
+        client = _make_mock_client()
+        api = IndiScriptApi(client, PropertyUpdateBus(), threading.Event())
+        # Should not raise
+        api.checkpoint({"count": 5})
+
+
+class TestPauseImmediateInterruptsWaitForState:
+    def test_pause_immediate_raises_paused_error(self):
+        client = _make_mock_client()
+        # Property doesn't exist → will wait
+        client._devices = {}
+
+        pause_immediate = threading.Event()
+        api = IndiScriptApi(client, PropertyUpdateBus(), threading.Event(),
+                            pause_immediate=pause_immediate)
+
+        def set_pause():
+            time.sleep(0.1)
+            pause_immediate.set()
+
+        threading.Thread(target=set_pause, daemon=True).start()
+        with pytest.raises(ScriptPausedError):
+            api.wait_for_state("Dev", "PROP", "Ok", timeout=5.0)
+
+    def test_pause_immediate_carries_last_checkpoint(self):
+        client = _make_mock_client()
+        client._devices = {}
+
+        pause_immediate = threading.Event()
+        api = IndiScriptApi(client, PropertyUpdateBus(), threading.Event(),
+                            pause_immediate=pause_immediate)
+        # Set a checkpoint before waiting
+        api._last_checkpoint = {"count": 3}
+
+        def set_pause():
+            time.sleep(0.1)
+            pause_immediate.set()
+
+        threading.Thread(target=set_pause, daemon=True).start()
+        with pytest.raises(ScriptPausedError) as exc_info:
+            api.wait_for_state("Dev", "PROP", "Ok", timeout=5.0)
+        assert exc_info.value.resume_params == {"count": 3}
+
+
+class TestPauseImmediateInterruptsSleep:
+    def test_sleep_raises_paused_on_immediate_pause(self):
+        cancel = threading.Event()
+        pause_immediate = threading.Event()
+        checkpoint = {"count": 7}
+        api = TimeScriptApi(cancel, pause_immediate=pause_immediate,
+                            get_checkpoint=lambda: checkpoint)
+
+        def set_pause():
+            time.sleep(0.05)
+            pause_immediate.set()
+
+        threading.Thread(target=set_pause, daemon=True).start()
+        with pytest.raises(ScriptPausedError) as exc_info:
+            api.sleep(5.0)
+        assert exc_info.value.resume_params == {"count": 7}
+
+
+class TestUpdateBlobParams:
+    def test_update_blob_params_calls_blob_register(self):
+        client = _make_mock_client()
+        registered = []
+        api = IndiScriptApi(client, PropertyUpdateBus(), threading.Event(),
+                            run_id="run123",
+                            blob_register=lambda d, r, p: registered.append((d, r, p)))
+        api.update_blob_params("CCD Simulator", {"frame_index": 2, "count": 5})
+        assert registered == [("CCD Simulator", "run123", {"frame_index": 2, "count": 5})]
+
+    def test_update_blob_params_no_op_without_run_id(self):
+        client = _make_mock_client()
+        registered = []
+        api = IndiScriptApi(client, PropertyUpdateBus(), threading.Event(),
+                            run_id=None,
+                            blob_register=lambda d, r, p: registered.append((d, r, p)))
+        api.update_blob_params("CCD Simulator", {"frame_index": 1})
+        assert registered == []
+
+    def test_update_blob_params_raises_if_cancelled(self):
+        client = _make_mock_client()
+        cancel = threading.Event()
+        cancel.set()
+        api = IndiScriptApi(client, PropertyUpdateBus(), cancel, run_id="run1",
+                            blob_register=lambda d, r, p: None)
+        with pytest.raises(ScriptCancelledError):
+            api.update_blob_params("CCD Simulator", {"frame_index": 1})
+
+
+# ---------------------------------------------------------------------------
+# ScriptRunner pause tests
+# ---------------------------------------------------------------------------
+
+
+class TestScriptRunnerPause:
+    def test_pause_deferred_broadcasts_paused_status(self, tmp_path):
+        broadcasts = []
+        runner, registry = _make_runner(tmp_path, broadcasts)
+        # Script loops with checkpoints
+        registry.save("looper", "\n".join([
+            "for i in range(10):",
+            "    indi.checkpoint({'count': 10 - i})",
+            "    time_utils.sleep(0.5)",
+        ]))
+
+        run_id = runner.run("looper")
+        time.sleep(0.15)
+        runner.pause(run_id, finish_current=True)
+        time.sleep(1.0)
+
+        paused_msgs = [m for m in broadcasts if m.get("status") == "paused"]
+        assert paused_msgs, "Expected a paused status message"
+        assert paused_msgs[0]["run_id"] == run_id
+
+    def test_pause_deferred_includes_resume_command(self, tmp_path):
+        broadcasts = []
+        runner, registry = _make_runner(tmp_path, broadcasts)
+        # Script loops: checkpoint then short sleep, so pause_deferred fires at next checkpoint
+        registry.save("checkpointer", "\n".join([
+            "for i in range(20):",
+            "    indi.checkpoint({'count': 20 - i, 'exposure': 10.0})",
+            "    time_utils.sleep(0.2)",
+        ]))
+
+        run_id = runner.run("checkpointer")
+        time.sleep(0.15)  # Let first iteration reach sleep
+        runner.pause(run_id, finish_current=True)
+        time.sleep(0.6)  # Wait for sleep to finish and checkpoint to fire
+
+        paused_msgs = [m for m in broadcasts if m.get("status") == "paused"]
+        assert paused_msgs, "Expected a paused status message"
+        rc = paused_msgs[0].get("resume_command")
+        assert rc is not None
+        assert rc["type"] == "script_control"
+        assert rc["action"] == "run"
+        assert "count" in rc["params"]
+
+    def test_pause_immediate_interrupts_sleep(self, tmp_path):
+        broadcasts = []
+        runner, registry = _make_runner(tmp_path, broadcasts)
+        registry.save("long_sleep", "time_utils.sleep(60)")
+
+        run_id = runner.run("long_sleep")
+        time.sleep(0.1)
+        runner.pause(run_id, finish_current=False)  # immediate
+        time.sleep(0.5)
+
+        paused_msgs = [m for m in broadcasts if m.get("status") == "paused"]
+        assert paused_msgs
+
+    def test_pause_returns_false_for_unknown_run(self, tmp_path):
+        runner, _ = _make_runner(tmp_path)
+        assert runner.pause("nonexistent-id") is False
+
+    def test_pause_removes_run_from_active_runs(self, tmp_path):
+        broadcasts = []
+        runner, registry = _make_runner(tmp_path, broadcasts)
+        registry.save("pausable", "indi.checkpoint({'count': 1})")
+
+        run_id = runner.run("pausable")
+        time.sleep(0.05)
+        runner.pause(run_id, finish_current=True)
+        time.sleep(0.5)
+
+        # After pause, run should no longer be in active runs
+        active = [r["run_id"] for r in runner.list_runs()]
+        assert run_id not in active
+
+
+# ---------------------------------------------------------------------------
+# ScriptRunner blob registry tests
+# ---------------------------------------------------------------------------
+
+
+class TestBlobRegistry:
+    def test_register_blob_device_stores_context(self, tmp_path):
+        runner, _ = _make_runner(tmp_path)
+        runner.register_blob_device("CCD Simulator", "run123", {"exposure": 10.0})
+        ctx = runner.get_blob_context_for_device("CCD Simulator")
+        assert ctx["run_id"] == "run123"
+        assert ctx["capture_params"]["exposure"] == 10.0
+
+    def test_blob_registry_cleared_on_run_complete(self, tmp_path):
+        broadcasts = []
+        runner, registry = _make_runner(tmp_path, broadcasts)
+        # Script sleeps briefly so we can register blob device while it's still running
+        registry.save("simple", "time_utils.sleep(0.2)")
+
+        run_id = runner.run("simple")
+        # Register while still running
+        runner.register_blob_device("CCD Simulator", run_id, {"exposure": 5.0})
+        # Verify it was registered
+        assert runner.get_blob_context_for_device("CCD Simulator") is not None
+        time.sleep(0.6)  # Let script finish
+
+        ctx = runner.get_blob_context_for_device("CCD Simulator")
+        assert ctx is None
+
+    def test_register_blob_with_no_capture_params(self, tmp_path):
+        runner, _ = _make_runner(tmp_path)
+        runner.register_blob_device("CCD Simulator", "run42", None)
+        ctx = runner.get_blob_context_for_device("CCD Simulator")
+        assert ctx["capture_params"] == {}
