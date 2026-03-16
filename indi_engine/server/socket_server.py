@@ -420,7 +420,11 @@ class SocketServer:
 
         device = msg_dict.get("device")
         msg_type = msg_dict.get("type")
-        logger.debug("broadcast at %.3f: type=%s device=%s", time.monotonic(), msg_type, device)
+        state = msg_dict.get("state")
+        if state:
+            logger.debug("broadcast at %.3f: type=%s device=%s state=%s", time.monotonic(), msg_type, device, state)
+        else:
+            logger.debug("broadcast at %.3f: type=%s device=%s", time.monotonic(), msg_type, device)
         data = (json.dumps(msg_dict) + "\n").encode("utf-8")
         dead = []
         with self._connections_lock:
