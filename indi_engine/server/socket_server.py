@@ -242,8 +242,25 @@ class SocketServer:
                 self._indi_client.sendNewSwitch(prop)
             else:
                 logger.warning("Unsupported data_type in 'new' command: %s", data_type)
+                return
         except IndiDisconnectedError:
             logger.warning("Cannot forward 'new' command: INDI client not connected")
+            return
+
+        # Broadcast synthetic Pending state so all clients know a command is in flight.
+        pending_elements = [
+            {"name": e["name"], "value": e.get("value"), "target_value": e.get("value")}
+            for e in msg.get("elements", [])
+        ]
+        self.broadcast({
+            "type": "set",
+            "device": msg["device"],
+            "property": msg["property"],
+            "data_type": data_type,
+            "state": "Pending",
+            "timestamp": None,
+            "elements": pending_elements,
+        })
 
     def _handle_server_control(self, msg: dict, requester: socket.socket) -> None:
         """Handle a server_control command (runs in its own thread)."""

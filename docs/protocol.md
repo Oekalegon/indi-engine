@@ -48,6 +48,18 @@ A `set*Vector` message comes from the INDI server and represents the **current a
 
 Each element also carries a `target_value` field: the last value the engine commanded via a `new` message, or `null` if no command has been sent yet. This allows clients to see both where a device currently is and where it was told to go.
 
+#### Property state values
+
+| state | source | meaning |
+|-------|--------|---------|
+| `Idle` | INDI server | Property is inactive |
+| `Ok` | INDI server | Property is at its target value |
+| `Busy` | INDI server | Device is performing an operation (confirmed by driver) |
+| `Alert` | INDI server | Error condition reported by driver |
+| `Pending` | INDIEngine | Command forwarded to INDI server; awaiting driver confirmation |
+
+`Pending` is an INDIEngine extension — it is not an INDI standard state. The engine broadcasts a synthetic `set` with `state=Pending` immediately after forwarding a `new` command, so clients can show a loading indicator without waiting for the driver to respond. When the actual `Busy` or `Ok` arrives from indiserver, it replaces `Pending`.
+
 Example: a mount midway through a slew to RA=10.5, DEC=45.0. The property state is `Busy` and the values reflect the current (moving) position:
 
 ```xml
@@ -114,6 +126,25 @@ forwarded to the INDI server as:
   <oneNumber name="DEC">45.0</oneNumber>
 </newNumberVector>
 ```
+
+The engine immediately broadcasts a `Pending` set to all subscribed clients:
+
+```json
+{
+    "type": "set",
+    "device": "Telescope Simulator",
+    "property": "EQUATORIAL_EOD_COORD",
+    "data_type": "number",
+    "state": "Pending",
+    "timestamp": null,
+    "elements": [
+        { "name": "RA",  "value": 10.5, "target_value": 10.5 },
+        { "name": "DEC", "value": 45.0, "target_value": 45.0 }
+    ]
+}
+```
+
+When the INDI server confirms the operation has started, a `set` with `state=Busy` follows and replaces `Pending`.
 
 ## Log messages
 

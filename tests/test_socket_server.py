@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from indi_engine.indi.protocol.client import PurePythonIndiClient
+from indi_engine.indi.protocol.errors import IndiDisconnectedError
 from indi_engine.server.socket_server import SocketServer
 
 TEST_PORT = 18624
@@ -352,3 +353,235 @@ def test_connect_server_clears_device_cache():
         client.connectServer()
 
     assert "StaleDevice" not in client._devices
+
+
+# ---------------------------------------------------------------------------
+# Pending state broadcast on new command
+# ---------------------------------------------------------------------------
+
+
+def _is_pending_set(msg):
+    return msg.get("type") == "set" and msg.get("state") == "Pending"
+
+
+class TestPendingBroadcast:
+    """Engine broadcasts state=Pending immediately after forwarding a new command."""
+
+    def test_new_number_broadcasts_pending(self, server):
+        client = _mock_indi_client()
+        server.set_indi_client(client)
+
+        observer = _connect()
+        _send(observer, {"type": "subscribe"})
+        _drain_until(observer, lambda m: m.get("type") == "subscribe_ack")
+
+        sender = _connect()
+        _send(sender, {
+            "type": "new",
+            "device": "Telescope Simulator",
+            "property": "EQUATORIAL_EOD_COORD",
+            "data_type": "number",
+            "elements": [
+                {"name": "RA", "value": 10.5},
+                {"name": "DEC", "value": 45.0},
+            ],
+        })
+
+        msg = _drain_until(observer, _is_pending_set)
+        sender.close()
+        observer.close()
+
+        assert msg["device"] == "Telescope Simulator"
+        assert msg["property"] == "EQUATORIAL_EOD_COORD"
+        assert msg["data_type"] == "number"
+        assert msg["state"] == "Pending"
+
+    def test_new_switch_broadcasts_pending(self, server):
+        client = _mock_indi_client()
+        server.set_indi_client(client)
+
+        observer = _connect()
+        _send(observer, {"type": "subscribe"})
+        _drain_until(observer, lambda m: m.get("type") == "subscribe_ack")
+
+        sender = _connect()
+        _send(sender, {
+            "type": "new",
+            "device": "ASI EFW",
+            "property": "CONNECTION",
+            "data_type": "switch",
+            "elements": [{"name": "CONNECT", "value": "On"}],
+        })
+
+        msg = _drain_until(observer, _is_pending_set)
+        sender.close()
+        observer.close()
+
+        assert msg["state"] == "Pending"
+        assert msg["data_type"] == "switch"
+
+    def test_new_text_broadcasts_pending(self, server):
+        client = _mock_indi_client()
+        server.set_indi_client(client)
+
+        observer = _connect()
+        _send(observer, {"type": "subscribe"})
+        _drain_until(observer, lambda m: m.get("type") == "subscribe_ack")
+
+        sender = _connect()
+        _send(sender, {
+            "type": "new",
+            "device": "Telescope Simulator",
+            "property": "ACTIVE_DEVICES",
+            "data_type": "text",
+            "elements": [{"name": "ACTIVE_TELESCOPE", "value": "Telescope Simulator"}],
+        })
+
+        msg = _drain_until(observer, _is_pending_set)
+        sender.close()
+        observer.close()
+
+        assert msg["state"] == "Pending"
+        assert msg["data_type"] == "text"
+
+    def test_pending_elements_carry_commanded_value_as_target(self, server):
+        client = _mock_indi_client()
+        server.set_indi_client(client)
+
+        observer = _connect()
+        _send(observer, {"type": "subscribe"})
+        _drain_until(observer, lambda m: m.get("type") == "subscribe_ack")
+
+        sender = _connect()
+        _send(sender, {
+            "type": "new",
+            "device": "ASI EFW",
+            "property": "FILTER_SLOT",
+            "data_type": "number",
+            "elements": [{"name": "FILTER_SLOT_VALUE", "value": 5}],
+        })
+
+        msg = _drain_until(observer, _is_pending_set)
+        sender.close()
+        observer.close()
+
+        elem = msg["elements"][0]
+        assert elem["name"] == "FILTER_SLOT_VALUE"
+        assert elem["value"] == 5
+        assert elem["target_value"] == 5
+
+    def test_pending_broadcast_to_all_subscribers(self, server):
+        """Pending reaches every subscribed client, not just the sender."""
+        client = _mock_indi_client()
+        server.set_indi_client(client)
+
+        obs1 = _connect()
+        obs2 = _connect()
+        for obs in (obs1, obs2):
+            _send(obs, {"type": "subscribe"})
+            _drain_until(obs, lambda m: m.get("type") == "subscribe_ack")
+
+        sender = _connect()
+        _send(sender, {
+            "type": "new",
+            "device": "CCD Simulator",
+            "property": "CCD_EXPOSURE",
+            "data_type": "number",
+            "elements": [{"name": "CCD_EXPOSURE_VALUE", "value": 30.0}],
+        })
+
+        msg1 = _drain_until(obs1, _is_pending_set)
+        msg2 = _drain_until(obs2, _is_pending_set)
+        sender.close()
+        obs1.close()
+        obs2.close()
+
+        assert msg1["state"] == "Pending"
+        assert msg2["state"] == "Pending"
+
+    def test_no_pending_when_indi_disconnected(self, server):
+        """If INDI client raises IndiDisconnectedError, no Pending is broadcast."""
+        client = _mock_indi_client()
+        client.sendNewNumber.side_effect = IndiDisconnectedError("not connected")
+        server.set_indi_client(client)
+
+        observer = _connect()
+        _send(observer, {"type": "subscribe"})
+        _drain_until(observer, lambda m: m.get("type") == "subscribe_ack")
+        observer.settimeout(0.5)
+
+        sender = _connect()
+        _send(sender, {
+            "type": "new",
+            "device": "Telescope Simulator",
+            "property": "EQUATORIAL_EOD_COORD",
+            "data_type": "number",
+            "elements": [{"name": "RA", "value": 5.0}],
+        })
+
+        received_pending = False
+        try:
+            _drain_until(observer, _is_pending_set, timeout=0.8)
+            received_pending = True
+        except TimeoutError:
+            pass
+
+        sender.close()
+        observer.close()
+
+        assert not received_pending
+
+    def test_no_pending_for_unsupported_data_type(self, server):
+        """Unknown data_type does not broadcast Pending."""
+        client = _mock_indi_client()
+        server.set_indi_client(client)
+
+        observer = _connect()
+        _send(observer, {"type": "subscribe"})
+        _drain_until(observer, lambda m: m.get("type") == "subscribe_ack")
+        observer.settimeout(0.5)
+
+        sender = _connect()
+        _send(sender, {
+            "type": "new",
+            "device": "SomeDevice",
+            "property": "SOME_PROP",
+            "data_type": "blob",
+            "elements": [{"name": "DATA", "value": ""}],
+        })
+
+        received_pending = False
+        try:
+            _drain_until(observer, _is_pending_set, timeout=0.8)
+            received_pending = True
+        except TimeoutError:
+            pass
+
+        sender.close()
+        observer.close()
+
+        assert not received_pending
+
+    def test_indi_client_send_called_before_pending(self, server):
+        """sendNewNumber is called exactly once when a number new command arrives."""
+        client = _mock_indi_client()
+        server.set_indi_client(client)
+
+        observer = _connect()
+        _send(observer, {"type": "subscribe"})
+        _drain_until(observer, lambda m: m.get("type") == "subscribe_ack")
+
+        sender = _connect()
+        _send(sender, {
+            "type": "new",
+            "device": "Telescope Simulator",
+            "property": "EQUATORIAL_EOD_COORD",
+            "data_type": "number",
+            "elements": [{"name": "RA", "value": 5.0}],
+        })
+
+        _drain_until(observer, _is_pending_set)
+        sender.close()
+        observer.close()
+
+        client.sendNewNumber.assert_called_once()
