@@ -373,6 +373,7 @@ class IndiTransport:
                         scan_pos = 0
                         continue
 
+                    self.logger.debug("recv: %d bytes at %.3f", len(data), time.monotonic())
                     buffer += data
 
                     # Extract complete top-level XML elements from the stream.
@@ -380,6 +381,7 @@ class IndiTransport:
                     # large messages (BLOBs) are not rescanned on every recv.
                     messages, buffer, scan_pos = _split_xml_messages(buffer, scan_pos)
                     for message_bytes in messages:
+                        self.logger.debug("queued message at %.3f: %s", time.monotonic(), message_bytes[:80])
                         self._message_queue.put(message_bytes)
 
                 except socket.timeout:
