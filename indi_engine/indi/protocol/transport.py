@@ -267,6 +267,7 @@ class IndiTransport:
 
             try:
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 self.socket.settimeout(SOCKET_TIMEOUT)
                 self.logger.info(f"Connecting to INDI server at {self.host}:{self.port}...")
                 self.socket.connect((self.host, self.port))
@@ -424,6 +425,7 @@ class IndiTransport:
                     self.socket = None
 
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 self.socket.settimeout(SOCKET_TIMEOUT)
                 self.socket.connect((self.host, self.port))
                 self._connected = True

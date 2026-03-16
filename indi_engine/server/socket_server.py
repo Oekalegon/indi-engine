@@ -113,6 +113,7 @@ class SocketServer:
         while self._running:
             try:
                 conn, addr = self._server_socket.accept()
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 logger.info("Client connected from %s:%d", addr[0], addr[1])
                 with self._connections_lock:
                     self._connections[conn] = set()  # no subscriptions yet
