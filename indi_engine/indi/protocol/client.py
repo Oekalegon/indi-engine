@@ -15,7 +15,7 @@ from .transport import IndiTransport
 from .parser import IndiXmlParser
 from .state import KnownState, ChangeType
 from .properties import IDevice, IProperty
-from .constants import IndiMessageType, INDI_HOST_DEFAULT, INDI_PORT_DEFAULT, BLOBHandling
+from .constants import IndiMessageType, IndiPropertyState, INDI_HOST_DEFAULT, INDI_PORT_DEFAULT, BLOBHandling
 from .errors import IndiConnectionError, IndiDisconnectedError
 
 logger = logging.getLogger(__name__)
@@ -485,6 +485,9 @@ class PurePythonIndiClient:
                     for elem_name, elem in prop.elements.items():
                         if elem_name in existing.elements:
                             existing.elements[elem_name].value = elem.value
+                            # Clear target_value once the command completes successfully
+                            if prop.state == IndiPropertyState.OK:
+                                existing.elements[elem_name].target_value = None
                     prop = existing
                 else:
                     device.properties[property_name] = prop
