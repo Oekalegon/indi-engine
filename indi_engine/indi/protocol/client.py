@@ -474,10 +474,20 @@ class PurePythonIndiClient:
         property_change = self._state.get_property_change(message, is_def_message=False)
 
         if property_change == ChangeType.UPDATED:
-            # Update property on device object
+            # Merge values into existing property to preserve def metadata
+            # (label, group, perm, format, min, max, step are absent in set messages)
             device = self._devices.get(device_name)
             if device:
-                device.properties[property_name] = prop
+                existing = device.properties.get(property_name)
+                if existing is not None:
+                    existing.state = prop.state
+                    existing.timestamp = prop.timestamp
+                    for elem_name, elem in prop.elements.items():
+                        if elem_name in existing.elements:
+                            existing.elements[elem_name].value = elem.value
+                    prop = existing
+                else:
+                    device.properties[property_name] = prop
             self._update_state_manager(device_name, property_name, prop)
             self.updateProperty(prop)
 
