@@ -28,6 +28,16 @@ def _parse_enum(enum_cls: Type[E], value: str, default: E) -> E:
         return default
 
 
+def _set_timeout_if_present(root: ET.Element, message: "IndiMessage") -> None:
+    """Set message.data['timeout'] from root attribute if present (def*Vector only)."""
+    timeout_str = root.get("timeout", "").strip()
+    if timeout_str:
+        try:
+            message.data["timeout"] = int(timeout_str)
+        except ValueError:
+            pass
+
+
 @dataclass
 class IndiMessage:
     """Represents a parsed INDI XML message."""
@@ -138,6 +148,7 @@ class IndiXmlParser:
         message.data["perm"] = root.get("perm", "rw")
         message.data["label"] = root.get("label", "")
         message.data["group"] = root.get("group", "")
+        _set_timeout_if_present(root, message)
         message.data["elements"] = {}
 
         for elem in root.findall(elem_tag):
@@ -161,6 +172,7 @@ class IndiXmlParser:
         message.data["perm"] = root.get("perm", "rw")
         message.data["label"] = root.get("label", "")
         message.data["group"] = root.get("group", "")
+        _set_timeout_if_present(root, message)
         message.data["elements"] = {}
 
         for elem in root.findall(elem_tag):
@@ -181,6 +193,7 @@ class IndiXmlParser:
         message.data["rule"] = root.get("rule", "AnyOfMany")  # OneOfMany, AtMostOne, AnyOfMany
         message.data["label"] = root.get("label", "")
         message.data["group"] = root.get("group", "")
+        _set_timeout_if_present(root, message)
         message.data["elements"] = {}
 
         for elem in root.findall(elem_tag):
@@ -222,6 +235,7 @@ class IndiXmlParser:
         message.data["perm"] = root.get("perm", "ro")
         message.data["label"] = root.get("label", "")
         message.data["group"] = root.get("group", "")
+        _set_timeout_if_present(root, message)
         message.data["elements"] = {}
 
         for elem in root.findall(elem_tag):
@@ -269,6 +283,13 @@ class IndiXmlParser:
         prop_rule  = _parse_enum(IndiSwitchRule,    message.data.get("rule",  "Unknown"), IndiSwitchRule.UNKNOWN)
         elem_state = _parse_enum(IndiPropertyState, message.data.get("state", "Idle"),    IndiPropertyState.IDLE)
 
+        timeout = message.data.get("timeout")
+        if timeout is not None and not isinstance(timeout, int):
+            try:
+                timeout = int(timeout)
+            except (TypeError, ValueError):
+                timeout = None
+
         prop = IProperty(
             device_name=message.device_name,
             name=message.property_name,
@@ -279,6 +300,7 @@ class IndiXmlParser:
             label=message.data.get("label", ""),
             group=message.data.get("group", ""),
             rule=prop_rule,
+            timeout=timeout,
         )
 
         # Create elements

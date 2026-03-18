@@ -62,6 +62,19 @@ class TestParseNumberProperty:
         assert "RA" in prop.elements
         assert prop.elements["RA"].value == "12.5"
 
+    def test_def_with_timeout_preserves_timeout(self):
+        """Test that timeout from def*Vector is parsed and stored on IProperty."""
+        xml = b'''<defNumberVector device="CCD" name="CCD_EXPOSURE" state="Idle" perm="rw" timeout="60">
+            <defNumber name="CCD_EXPOSURE_VALUE" format="%5.2f" min="0" max="3600" step="1">1.0</defNumber>
+        </defNumberVector>'''
+        parser = IndiXmlParser()
+        message = parser.parse_message(xml)
+        assert message is not None
+        assert message.data.get("timeout") == 60
+        prop = parser.create_property_from_message(message)
+        assert prop is not None
+        assert prop.getTimeout() == 60
+
 
 class TestParseTextProperty:
     """Tests for parsing text properties."""

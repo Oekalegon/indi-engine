@@ -5,6 +5,8 @@ This is the communication protocol between the INDI engine and clients of the en
 ## INDI messages forwarding.
 All INDI messages that are comming from the server should still be forwarded. And any commands from the client towards the INDI server and drivers should also be forwarded. The format, however, will be different. We propose to use a JSON format instead of the XML format used in INDI server.
 
+Property definition and value data (def*Vector / set*Vector) are forwarded as `def` and `set` JSON messages with the fields described below. **delProperty** and **delDevice** from the INDI server are handled internally (device state is updated and callbacks run) but are not yet forwarded to engine clients as a dedicated JSON message type, so subscribed clients do not receive an explicit "property deleted" or "device removed" notification.
+
 So, for instance, a
 
 ```xml
@@ -38,6 +40,39 @@ will be forwarded as:
             "step": 1.0,
             "value": 1.0
         }
+    ]
+}
+```
+
+The `def` message may include an optional **`timeout`** (integer, seconds) when the INDI server sends it on def*Vector; it indicates how long clients should wait for a driver response after sending a `new` command for this property.
+
+For **BLOB** properties, each element in `def` includes **`blob_format`** (e.g. `".fits"`) and **`blob_size`** (unencoded byte count) so clients know what to expect when receiving BLOB data.
+
+For **switch** properties, the `def` message also includes a `rule` field indicating how many switches may be on at once:
+
+| rule         | meaning |
+|--------------|--------|
+| `OneOfMany`  | Exactly one switch must be On (e.g. track mode) |
+| `AtMostOne`  | At most one switch may be On (e.g. abort) |
+| `AnyOfMany`  | Any combination of On/Off is allowed (e.g. power toggles) |
+
+Example `def` for a switch vector:
+
+```json
+{
+    "device": "Telescope Simulator",
+    "property": "TRACK_MODE",
+    "data_type": "switch",
+    "label": "Track Mode",
+    "group": "Main Control",
+    "state": "Ok",
+    "perm": "rw",
+    "rule": "OneOfMany",
+    "timestamp": "2026-03-05T12:00:00",
+    "elements": [
+        { "name": "TRACK_SIDEREAL", "label": "Sidereal", "value": "On" },
+        { "name": "TRACK_LUNAR",    "label": "Lunar",    "value": "Off" },
+        { "name": "TRACK_SOLAR",    "label": "Solar",    "value": "Off" }
     ]
 }
 ```
@@ -184,7 +219,7 @@ Server-level messages without a device use `null` for the `device` field:
 
 | type | direction | description |
 |------|-----------|-------------|
-| `def` | engine → client | Property definition with full metadata (sent once per property, and replayed on subscribe) |
+| `def` | engine → client | Property definition with full metadata (label, group, perm, rule for switch; sent once per property, replayed on subscribe) |
 | `set` | engine → client | Property value update from the INDI server |
 | `new` | client → engine | Command a new property value; engine forwards to INDI server |
 | `message` | engine → client | Log message from INDI server or engine component |

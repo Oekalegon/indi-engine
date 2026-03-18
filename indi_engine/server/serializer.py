@@ -3,14 +3,15 @@
 The engine protocol uses JSON over TCP (newline-delimited). This module handles
 the IProperty → dict conversion for the two outbound message types:
 
-  "def" — full property definition including metadata (label, group, perm, format, etc.)
+  "def" — full property definition including metadata (label, group, perm, timeout if present,
+          rule for switch; number elements: format, min, max, step; BLOB elements: blob_format, blob_size)
   "set" — current value update; omits metadata, adds target_value per element
   "message" — log/status text from INDI server or engine components
 """
 
 from typing import Optional
 from indi_engine.indi.protocol.properties import IDevice, IProperty
-from indi_engine.indi.protocol.constants import IndiPropertyType
+from indi_engine.indi.protocol.constants import IndiPropertyType, IndiSwitchRule
 
 
 def serialize_property(prop: IProperty, mode: str) -> dict:
@@ -36,6 +37,10 @@ def serialize_property(prop: IProperty, mode: str) -> dict:
         result["label"] = prop.label
         result["group"] = prop.group
         result["perm"] = prop.perm.value
+        if prop.timeout is not None:
+            result["timeout"] = prop.timeout
+        if prop.type == IndiPropertyType.SWITCH and prop.rule != IndiSwitchRule.UNKNOWN:
+            result["rule"] = prop.rule.value
 
     result["elements"] = [
         _serialize_element(elem, prop.type, mode)
@@ -94,7 +99,8 @@ def _serialize_element_def(elem, prop_type: IndiPropertyType) -> dict:
         base["value"] = _to_float(elem.value)
 
     elif prop_type == IndiPropertyType.BLOB:
-        pass  # no data in def; name and label are sufficient
+        base["blob_format"] = elem.blob_format
+        base["blob_size"] = elem.blob_size
 
     else:
         # TEXT, SWITCH, LIGHT

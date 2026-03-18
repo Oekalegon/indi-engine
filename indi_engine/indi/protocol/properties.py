@@ -123,6 +123,7 @@ class IProperty:
         label: Human-readable label (optional)
         group: GUI group name (optional)
         rule: Switch rule (only meaningful for SWITCH type)
+        timeout: Optional timeout in seconds (def*Vector; how long to wait for driver response)
         elements: Dictionary of element name -> IPropertyElement
     """
     device_name: str
@@ -134,6 +135,7 @@ class IProperty:
     label: str = ""
     group: str = ""
     rule: IndiSwitchRule = IndiSwitchRule.UNKNOWN
+    timeout: Optional[int] = None
     elements: Dict[str, IPropertyElement] = field(default_factory=dict)
 
     def getDeviceName(self) -> str:
@@ -175,6 +177,10 @@ class IProperty:
     def getRuleAsString(self) -> str:
         """Get switch rule as string (e.g. 'OneOfMany')."""
         return self.rule.value
+
+    def getTimeout(self) -> Optional[int]:
+        """Get property timeout in seconds (def*Vector; how long to wait for driver response)."""
+        return self.timeout
 
     def getNumber(self) -> Optional[List[IPropertyElement]]:
         """Get number elements (for number properties)."""
