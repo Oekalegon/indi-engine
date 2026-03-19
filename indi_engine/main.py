@@ -1,6 +1,7 @@
 import argparse
 import logging
 import signal
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,6 +15,7 @@ from indi_engine.indi.server import (
 from indi_engine.server.socket_server import SocketServer
 from indi_engine.server.serializer import serialize_property, serialize_message
 from indi_engine.indi.device_classifier import classify_device
+from indi_engine.indi.protocol.constants import IndiPropertyState
 from indi_engine.network.identity import EngineIdentity
 from indi_engine.network.peer import PeerConnection
 from indi_engine.network.discovery import EngineDiscovery
@@ -126,6 +128,13 @@ def main():
 
         _indi_server_id = f"indi://{indi_host}:{indi_port}"
 
+        # Throttle high-frequency set (e.g. exposure countdown) so a slow client
+        # doesn't block the INDI processing thread and cause the countdown to lag.
+        # Set to 0 in config to disable and forward every message (may lag if client is slow).
+        _set_throttle_interval = engine_cfg.get("set_throttle_interval", 0.25)
+        _set_throttle: dict[tuple[str, str], float] = {}
+        _set_throttle_lock = threading.Lock()
+
         def _on_new_property(prop):
             _orig_newProperty(prop)
             msg = serialize_property(prop, "def")
@@ -148,6 +157,18 @@ def main():
 
         def _on_update_property(prop):
             _orig_updateProperty(prop)
+            # Throttle set broadcasts when state is Busy (e.g. exposure countdown)
+            # unless set_throttle_interval is 0 (forward every message).
+            if _set_throttle_interval > 0:
+                key = (prop.device_name, prop.name)
+                now = time.monotonic()
+                with _set_throttle_lock:
+                    if prop.state != IndiPropertyState.BUSY:
+                        _set_throttle.pop(key, None)  # allow next Busy to send immediately
+                    elif now - _set_throttle.get(key, 0) < _set_throttle_interval:
+                        return  # skip this Busy update
+                    else:
+                        _set_throttle[key] = now
             msg = serialize_property(prop, "set")
             msg["provenance"] = [_indi_server_id]
             socket_server.broadcast(msg)

@@ -24,6 +24,9 @@ server:
 engine:
   host: "0.0.0.0"
   port: 8624
+  # Seconds between set broadcasts per (device, property) when state is Busy (e.g. exposure
+  # countdown). Reduces lag when clients are slow. Set to 0 to forward every message.
+  set_throttle_interval: 0.25
   # Stable UUID for this engine. Set explicitly so other engines can reference
   # it by ID in their subscriptions. If omitted, a random UUID is generated
   # for this session only (not stable across restarts).

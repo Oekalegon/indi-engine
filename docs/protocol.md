@@ -83,6 +83,8 @@ A `set*Vector` message comes from the INDI server and represents the **current a
 
 Each element also carries a `target_value` field: the last value the engine commanded via a `new` message, or `null` if no command has been sent yet. This allows clients to see both where a device currently is and where it was told to go.
 
+**Exposure countdown and high-frequency updates:** Some INDI drivers (e.g. CCD exposure) send many `set` updates per second when a countdown is below 1 second. By default the engine throttles `set` broadcasts for the same (device, property) to at most one every 0.25s while state is `Busy`, so that slow clients do not block the INDI processing thread and cause the countdown to lag. **Throttling drops intermediate Busy updates** (clients see a sampling, not every tick). Terminal states (`Ok`, `Idle`, `Alert`) are always sent immediately. To forward every message, set `engine.set_throttle_interval` to `0` in config (a slow client may then cause lag). Clients should read from the engine socket in a dedicated thread and update the UI from a queue or at a limited rate (e.g. 2–4 FPS for countdowns) so that the TCP receive buffer does not fill and block the engine.
+
 #### Property state values
 
 | state | source | meaning |
